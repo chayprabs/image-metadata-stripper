@@ -34,6 +34,7 @@ __pycache__/
 .vscode/
 
 # Test / coverage
+clean-*
 coverage/
 playwright-report/
 test-results/
