@@ -44,7 +44,9 @@ export default function HomePage() {
       mode: getProcessingMode(file.type, file.name),
     }));
     setJobs((prev) => [...prev, ...newJobs]);
-    for (const job of newJobs) void loadMetadata(job);
+    for (const job of newJobs) {
+      if (job.mode === "browser") void loadMetadata(job);
+    }
   }, []);
 
   async function loadMetadata(job: FileJob) {
@@ -216,7 +218,12 @@ export default function HomePage() {
             <button
               type="button"
               className="btn-secondary"
-              onClick={() => updateJob(job.id, { showMetadata: !job.showMetadata })}
+              disabled={job.loading}
+              onClick={() => {
+                const showMetadata = !job.showMetadata;
+                updateJob(job.id, { showMetadata });
+                if (showMetadata && !job.report) void loadMetadata(job);
+              }}
             >
               View metadata
             </button>
@@ -235,7 +242,7 @@ export default function HomePage() {
                 <FileJson size={14} /> Prove-clean JSON
               </button>
               <button type="button" className="btn-secondary" onClick={() => downloadProveCleanReport(job)}>
-                <Download size={14} /> Prove-clean report
+                <Download size={14} /> Prove-clean report (TXT)
               </button>
             </div>
           )}

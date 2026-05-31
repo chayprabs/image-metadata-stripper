@@ -8,6 +8,7 @@ declare module "piexifjs" {
   }
   export const ImageIFD: Record<string, number>;
   export const ExifIFD: Record<string, number>;
+  export const GPSIFD: Record<string, number>;
   export function load(dataUrl: string): IExif;
   export function dump(exifObj: IExif): string;
   export function insert(exifBytes: string, dataUrl: string): string;

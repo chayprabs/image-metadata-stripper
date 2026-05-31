@@ -13,8 +13,8 @@ export default function PrivacyPage() {
 
       <h2>Server processing</h2>
       <p>
-        PDF, audio, and video formats may be sent to our optional backend worker when you choose to
-        scrub them. Those files are stored only in ephemeral job directories, deleted after a short
+        PDF, audio, and video formats may be sent to our optional backend worker when you view
+        metadata or scrub them. Those files are stored only in ephemeral job directories, deleted after a short
         retention period, and are not used for training, advertising, or resale.
       </p>
 

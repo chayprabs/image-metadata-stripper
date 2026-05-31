@@ -22,6 +22,7 @@ QUALIFYING_CRITERIA.md
 .env.*
 
 # Python
+*.egg-info/
 __pycache__/
 *.py[cod]
 .venv/

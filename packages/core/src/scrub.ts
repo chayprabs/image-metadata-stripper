@@ -36,7 +36,7 @@ export async function scrub(file: File, opts: ScrubOptions): Promise<ScrubResult
   let cleanedBlob: Blob;
 
   if (mime === "image/jpeg" || file.name.match(/\.jpe?g$/i)) {
-    cleanedBlob = await scrubJpeg(file, opts, before);
+    cleanedBlob = await scrubJpeg(file, opts);
   } else if (mime === "image/png" || file.name.match(/\.png$/i)) {
     cleanedBlob = await scrubPng(file);
   } else {
@@ -68,11 +68,7 @@ export async function scrub(file: File, opts: ScrubOptions): Promise<ScrubResult
   };
 }
 
-async function scrubJpeg(
-  file: File,
-  opts: ScrubOptions,
-  before: MetadataReport
-): Promise<Blob> {
+async function scrubJpeg(file: File, opts: ScrubOptions): Promise<Blob> {
   const buffer = await file.arrayBuffer();
   const binary = arrayBufferToBinaryString(buffer);
   let dataUrl: string;
@@ -118,7 +114,7 @@ async function scrubJpeg(
   }
 
   if (opts.preset === "custom" && opts.custom?.length) {
-    applyCustomExifRemoval(exifObj, opts.custom, before);
+    applyCustomExifRemoval(exifObj, opts.custom);
     const dumped = piexif.dump(exifObj);
     const inserted = piexif.insert(dumped, piexif.remove(dataUrl));
     return dataUrlToBlob(inserted, "image/jpeg");
@@ -147,17 +143,23 @@ function stripGpsAuthorFromExif(exifObj: piexif.IExif): void {
   }
 }
 
-function applyCustomExifRemoval(
-  _exifObj: piexif.IExif,
-  custom: CustomField[],
-  _before: MetadataReport
-): void {
+function applyCustomExifRemoval(exifObj: piexif.IExif, custom: CustomField[]): void {
   for (const { field } of custom) {
-    for (const block of _before.blocks) {
-      if (block.fields[field] !== undefined) {
-        delete block.fields[field];
-      }
-    }
+    deleteExifField(exifObj, field);
+  }
+}
+
+function deleteExifField(exifObj: piexif.IExif, field: string): void {
+  const ifdMaps: [Record<string, unknown>, keyof piexif.IExif][] = [
+    [piexif.ImageIFD as Record<string, unknown>, "0th"],
+    [piexif.ExifIFD as Record<string, unknown>, "Exif"],
+    [piexif.GPSIFD as Record<string, unknown>, "GPS"],
+  ];
+  for (const [ifd, key] of ifdMaps) {
+    const tag = ifd[field];
+    if (typeof tag !== "number") continue;
+    const section = exifObj[key] as Record<number, unknown> | undefined;
+    if (section?.[tag] !== undefined) delete section[tag];
   }
 }
 
@@ -183,13 +185,6 @@ function diffStripped(
         if (shouldStripField(field, opts)) {
           stripped.push({ namespace: block.namespace, field, value });
         }
-      }
-    }
-  }
-  if (stripped.length === 0 && before.blocks.length > 0) {
-    for (const block of before.blocks) {
-      for (const [field, value] of Object.entries(block.fields)) {
-        stripped.push({ namespace: block.namespace, field, value });
       }
     }
   }

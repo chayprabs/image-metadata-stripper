@@ -27,6 +27,16 @@ app.add_middleware(
 HMAC_SECRET = os.environ.get("EXIFSCRUB_HMAC_SECRET", "dev-secret-change-me").encode()
 RETENTION_SECONDS = int(os.environ.get("RETENTION_SECONDS", "300"))
 MAX_FILE_BYTES = int(os.environ.get("MAX_FILE_BYTES", str(100 * 1024 * 1024)))
+SKIP_METADATA_NAMESPACES = frozenset({"System", "ExifTool", "File"})
+SKIP_METADATA_FIELDS = frozenset({"SourceFile", "ExifToolVersion"})
+VALID_SCRUB_PRESETS = frozenset({"all", "gps_author", "orientation_only"})
+
+
+def safe_upload_name(name: str | None) -> str:
+    base = Path(name or "upload.bin").name
+    if not base or base in (".", ".."):
+        return "upload.bin"
+    return base
 
 
 @app.get("/health")
@@ -67,10 +77,10 @@ def read_metadata(path: Path, name: str, mime: str) -> dict[str, Any]:
             fields = data[0]
             by_ns: dict[str, dict[str, Any]] = {}
             for key, value in fields.items():
-                if key in ("SourceFile", "ExifToolVersion"):
-                    continue
                 ns = key.split(":", 1)[0] if ":" in key else "EXIF"
                 field = key.split(":", 1)[-1]
+                if ns in SKIP_METADATA_NAMESPACES or field in SKIP_METADATA_FIELDS:
+                    continue
                 by_ns.setdefault(ns, {})[field] = value
             blocks = [{"namespace": k, "fields": v} for k, v in by_ns.items()]
 
@@ -128,7 +138,12 @@ def scrub_file(path: Path, preset: str) -> tuple[Path, list[dict], list[dict]]:
     if preset == "all":
         stripped = stripped_entries
     else:
-        stripped = [s for s in stripped_entries if s not in retained]
+        retained_keys = {(r["namespace"], r["field"]) for r in retained}
+        stripped = [
+            s
+            for s in stripped_entries
+            if (s["namespace"], s["field"]) not in retained_keys
+        ]
 
     return out_path, stripped, retained
 
@@ -153,12 +168,13 @@ def sign_payload(payload: dict[str, Any]) -> str:
 async def v1_read(file: UploadFile = File(...)) -> JSONResponse:
     job_dir = tempfile.mkdtemp(prefix="exifscrub-")
     try:
-        dest = Path(job_dir) / (file.filename or "upload.bin")
+        upload_name = safe_upload_name(file.filename)
+        dest = Path(job_dir) / upload_name
         content = await file.read()
         if len(content) > MAX_FILE_BYTES:
             raise HTTPException(413, "File too large")
         dest.write_bytes(content)
-        report = read_metadata(dest, file.filename or "upload.bin", file.content_type or "application/octet-stream")
+        report = read_metadata(dest, upload_name, file.content_type or "application/octet-stream")
         return JSONResponse(report)
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
@@ -169,9 +185,13 @@ async def v1_scrub(
     file: UploadFile = File(...),
     preset: str = Form("all"),
 ) -> JSONResponse:
+    if preset not in VALID_SCRUB_PRESETS:
+        raise HTTPException(400, f"Invalid preset: {preset}")
+
     job_dir = tempfile.mkdtemp(prefix="exifscrub-")
     try:
-        dest = Path(job_dir) / (file.filename or "upload.bin")
+        upload_name = safe_upload_name(file.filename)
+        dest = Path(job_dir) / upload_name
         content = await file.read()
         if len(content) > MAX_FILE_BYTES:
             raise HTTPException(413, "File too large")
@@ -183,7 +203,7 @@ async def v1_scrub(
 
         prove = {
             "version": "1",
-            "filename": file.filename or "upload.bin",
+            "filename": upload_name,
             "cleanedSha256": cleaned_sha,
             "stripped": stripped,
             "retained": retained,

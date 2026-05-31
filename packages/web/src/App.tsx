@@ -4,6 +4,7 @@ import HomePage from "./pages/HomePage";
 import PrivacyPage from "./pages/PrivacyPage";
 import TermsPage from "./pages/TermsPage";
 import SeoLandingPage from "./pages/SeoLandingPage";
+import NotFoundPage from "./pages/NotFoundPage";
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/pdf-metadata-remove" element={<SeoLandingPage slug="pdf-metadata-remove" />} />
         <Route path="/mp4-metadata-strip" element={<SeoLandingPage slug="mp4-metadata-strip" />} />
         <Route path="/heic-metadata" element={<SeoLandingPage slug="heic-metadata" />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </Layout>
   );
