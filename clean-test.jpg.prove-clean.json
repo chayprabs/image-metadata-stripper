@@ -1,0 +1,10 @@
+{
+  "version": "1",
+  "filename": "test.jpg",
+  "cleanedSha256": "ad0b3568a89c25ae557bd53d228787e4b7786e62fbc483af13d2b78f79019579",
+  "stripped": [],
+  "retained": [],
+  "timestamp": "2026-05-31T22:03:42.369Z",
+  "signature": "dLk1/VbV+ROKi9SXWrZJGHfG4x0MpkMskn6UR80TvF4YMKnkKPUwDXc1EJ797rnmbdPXbtn0VRJWlLYNZ1RLDg==",
+  "signatureAlgorithm": "Ed25519-browser"
+}

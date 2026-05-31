@@ -251,11 +251,11 @@ export default function HomePage() {
             <details style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
               <summary>
                 Metadata diff (
-                {job.diffResult.entries.filter((e) => e.status === "removed").length} removed)
+                {job.diffResult.entries.filter((entry) => entry.status === "removed").length} removed)
               </summary>
               <pre className="metadata-panel">
                 {JSON.stringify(
-                  job.diffResult.entries.filter((e) => e.status !== "unchanged"),
+                  job.diffResult.entries.filter((entry) => entry.status !== "unchanged"),
                   null,
                   2
                 )}
