@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import HomePage from "./HomePage";
 
 const SEO_CONTENT: Record<
@@ -34,6 +35,12 @@ const SEO_CONTENT: Record<
 export default function SeoLandingPage({ slug }: { slug: string }) {
   const content = SEO_CONTENT[slug];
   if (!content) return null;
+
+  useEffect(() => {
+    document.title = `${content.title} — ExifScrub`;
+    const meta = document.querySelector('meta[name="description"]');
+    if (meta) meta.setAttribute("content", content.body);
+  }, [content.title, content.body]);
 
   return (
     <div>

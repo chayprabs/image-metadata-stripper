@@ -12,18 +12,9 @@ import { read, AUTHOR_KEYS, GPS_KEYS } from "./read.js";
 import { sha256HexFromBlob } from "./hash.js";
 import { buildProveCleanPayload, signProveClean } from "./prove-clean.js";
 
-const METADATA_PNG_TYPES = new Set([
-  "tEXt",
-  "iTXt",
-  "zTXt",
-  "eXIf",
-  "tIME",
-  "pHYs",
-  "sRGB",
-  "gAMA",
-  "cHRM",
-  "iCCP",
-]);
+const PNG_TEXT_CHUNKS = new Set(["tEXt", "iTXt", "zTXt"]);
+const PNG_EXIF_CHUNK = "eXIf";
+const PNG_STRIP_ALL = new Set(["tEXt", "iTXt", "zTXt", "eXIf", "tIME", "pHYs", "gAMA", "cHRM"]);
 
 export interface ScrubOptions {
   preset: ScrubPreset;
@@ -43,9 +34,11 @@ export async function scrub(file: File, opts: ScrubOptions): Promise<ScrubResult
     mime === "image/webp" ||
     mime === "image/gif" ||
     mime === "image/bmp" ||
-    file.name.match(/\.(webp|gif|bmp|tiff?|heic|heif|avif)$/i)
+    file.name.match(/\.(webp|gif|bmp|tiff?|avif)$/i)
   ) {
     cleanedBlob = await scrubViaCanvas(file, opts, mime);
+  } else if (mime === "image/heic" || mime === "image/heif" || file.name.match(/\.heic$|\.heif$/i)) {
+    cleanedBlob = await scrubHeic(file, opts);
   } else {
     cleanedBlob = new Blob([await file.arrayBuffer()], { type: mime });
   }
@@ -179,6 +172,24 @@ function deleteExifField(exifObj: piexif.IExif, field: string): void {
   }
 }
 
+async function scrubHeic(file: File, opts: ScrubOptions): Promise<Blob> {
+  if (typeof document === "undefined") {
+    return new Blob([await file.arrayBuffer()], { type: file.type || "image/heic" });
+  }
+  try {
+    const heic2any = (await import("heic2any")).default;
+    const converted = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.92 });
+    const jpegBlob = Array.isArray(converted) ? converted[0]! : converted;
+    const jpegFile = new File([jpegBlob], file.name.replace(/\.heic$/i, ".jpg"), {
+      type: "image/jpeg",
+    });
+    const scrubbed = await scrubJpeg(jpegFile, opts);
+    return scrubbed;
+  } catch {
+    return new Blob([await file.arrayBuffer()], { type: file.type || "image/heic" });
+  }
+}
+
 async function scrubViaCanvas(file: File, opts: ScrubOptions, mime: string): Promise<Blob> {
   if (typeof document === "undefined") {
     return new Blob([await file.arrayBuffer()], { type: mime });
@@ -218,14 +229,14 @@ async function scrubPng(file: File, opts: ScrubOptions): Promise<Blob> {
   const chunks = extractChunks(buffer);
 
   if (opts.preset === "all") {
-    const kept = chunks.filter((c) => !METADATA_PNG_TYPES.has(c.name));
-    const encoded = encodeChunks(kept);
-    return new Blob([new Uint8Array(encoded)], { type: "image/png" });
+    const kept = chunks.filter((c) => !PNG_STRIP_ALL.has(c.name));
+    return new Blob([new Uint8Array(encodeChunks(kept))], { type: "image/png" });
   }
 
   if (opts.preset === "gps_author") {
     const kept = chunks.filter((c) => {
-      if (!METADATA_PNG_TYPES.has(c.name)) return true;
+      if (c.name === PNG_EXIF_CHUNK) return false;
+      if (!PNG_TEXT_CHUNKS.has(c.name)) return true;
       const text = new TextDecoder().decode(c.data).toLowerCase();
       return !(
         text.includes("gps") ||
@@ -235,17 +246,26 @@ async function scrubPng(file: File, opts: ScrubOptions): Promise<Blob> {
         text.includes("owner")
       );
     });
-    const encoded = encodeChunks(kept);
-    return new Blob([new Uint8Array(encoded)], { type: "image/png" });
+    return new Blob([new Uint8Array(encodeChunks(kept))], { type: "image/png" });
   }
 
   if (opts.preset === "orientation_only") {
-    return scrubPng(file, { preset: "all" });
+    const kept = chunks.filter((c) => !PNG_TEXT_CHUNKS.has(c.name) && c.name !== "tIME");
+    return new Blob([new Uint8Array(encodeChunks(kept))], { type: "image/png" });
   }
 
-  const kept = chunks.filter((c) => !METADATA_PNG_TYPES.has(c.name));
-  const encoded = encodeChunks(kept);
-  return new Blob([new Uint8Array(encoded)], { type: "image/png" });
+  if (opts.preset === "custom" && opts.custom?.length) {
+    const stripFields = new Set(opts.custom.map((c) => c.field.toLowerCase()));
+    const kept = chunks.filter((c) => {
+      if (!PNG_TEXT_CHUNKS.has(c.name) && c.name !== PNG_EXIF_CHUNK) return true;
+      const text = new TextDecoder().decode(c.data).toLowerCase();
+      return ![...stripFields].some((f) => text.includes(f));
+    });
+    return new Blob([new Uint8Array(encodeChunks(kept))], { type: "image/png" });
+  }
+
+  const kept = chunks.filter((c) => !PNG_STRIP_ALL.has(c.name));
+  return new Blob([new Uint8Array(encodeChunks(kept))], { type: "image/png" });
 }
 
 function diffStripped(

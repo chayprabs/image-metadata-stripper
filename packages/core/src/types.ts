@@ -51,6 +51,8 @@ export interface ProveCleanPayload {
   timestamp: string;
   signature: string;
   signatureAlgorithm: "HMAC-SHA256" | "Ed25519-browser";
+  signingKeyId?: string;
+  publicKey?: string;
 }
 
 export interface DiffEntry {

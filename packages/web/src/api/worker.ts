@@ -1,4 +1,4 @@
-import type { MetadataReport, ScrubPreset, ScrubResult } from "@exifscrub/core";
+import type { CustomField, MetadataReport, ScrubPreset, ScrubResult } from "@exifscrub/core";
 
 const API_BASE = import.meta.env.VITE_WORKER_URL ?? "/api";
 
@@ -9,6 +9,15 @@ async function workerFetch(path: string, init: RequestInit): Promise<Response> {
     throw new Error(
       "Server processing is unavailable. Start the worker (docker compose up) or try again later.",
     );
+  }
+}
+
+export async function workerHealth(): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(3000) });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 
@@ -23,10 +32,15 @@ export async function workerRead(file: File): Promise<MetadataReport> {
   return res.json() as Promise<MetadataReport>;
 }
 
-export async function workerScrub(file: File, preset: ScrubPreset): Promise<ScrubResult> {
+export async function workerScrub(
+  file: File,
+  preset: ScrubPreset,
+  custom?: CustomField[],
+): Promise<ScrubResult> {
   const form = new FormData();
   form.append("file", file);
   form.append("preset", preset);
+  if (custom?.length) form.append("custom", JSON.stringify(custom));
   const res = await workerFetch("/v1/scrub", { method: "POST", body: form });
   if (!res.ok) {
     const err = await res.text();
@@ -49,4 +63,31 @@ export async function workerScrub(file: File, preset: ScrubPreset): Promise<Scru
     retained: data.retained,
     proveCleanJson: data.proveCleanJson,
   };
+}
+
+export async function workerFetchUrl(url: string): Promise<File> {
+  const form = new FormData();
+  form.append("url", url);
+  const res = await workerFetch("/v1/fetch", { method: "POST", body: form });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || `Fetch URL failed (${res.status})`);
+  }
+  const data = (await res.json()) as { filename: string; mime: string; base64: string };
+  const bytes = Uint8Array.from(atob(data.base64), (c) => c.charCodeAt(0));
+  return new File([bytes], data.filename, { type: data.mime });
+}
+
+export async function workerBatch(file: File, preset: ScrubPreset): Promise<Blob> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("preset", preset);
+  const res = await workerFetch("/v1/batch", { method: "POST", body: form });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || `Batch failed (${res.status})`);
+  }
+  const data = (await res.json()) as { zipBase64: string };
+  const bytes = Uint8Array.from(atob(data.zipBase64), (c) => c.charCodeAt(0));
+  return new Blob([bytes], { type: "application/zip" });
 }

@@ -7,7 +7,7 @@ let cachedPublicKey: CryptoKey | null = null;
 
 async function getSigningKey(): Promise<CryptoKey> {
   if (cachedPrivateKey) return cachedPrivateKey;
-  const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, false, [
+  const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
     "sign",
     "verify",
   ]);
@@ -16,17 +16,15 @@ async function getSigningKey(): Promise<CryptoKey> {
   return cachedPrivateKey;
 }
 
-async function getVerifyKey(): Promise<CryptoKey> {
-  await getSigningKey();
-  return cachedPublicKey!;
-}
-
 export async function buildProveCleanPayload(input: {
   filename: string;
   cleanedSha256: string;
   stripped: ScrubFieldEntry[];
   retained: ScrubFieldEntry[];
 }): Promise<ProveCleanPayload> {
+  await getSigningKey();
+  const exported = await crypto.subtle.exportKey("raw", cachedPublicKey!);
+  const publicKey = btoa(String.fromCharCode(...new Uint8Array(exported)));
   return {
     version: "1",
     filename: input.filename,
@@ -36,11 +34,24 @@ export async function buildProveCleanPayload(input: {
     timestamp: new Date().toISOString(),
     signature: "",
     signatureAlgorithm: "Ed25519-browser",
+    signingKeyId: SIGNING_KEY_ID,
+    publicKey,
   };
 }
 
-export function canonicalPayload(payload: Omit<ProveCleanPayload, "signature">): string {
-  return JSON.stringify({
+function sortKeys(obj: Record<string, unknown>): Record<string, unknown> {
+  return Object.keys(obj)
+    .sort()
+    .reduce<Record<string, unknown>>((acc, k) => {
+      acc[k] = obj[k];
+      return acc;
+    }, {});
+}
+
+export function canonicalPayload(
+  payload: Omit<ProveCleanPayload, "signature">,
+): string {
+  const base: Record<string, unknown> = {
     version: payload.version,
     filename: payload.filename,
     cleanedSha256: payload.cleanedSha256,
@@ -48,7 +59,10 @@ export function canonicalPayload(payload: Omit<ProveCleanPayload, "signature">):
     retained: payload.retained,
     timestamp: payload.timestamp,
     signatureAlgorithm: payload.signatureAlgorithm,
-  });
+  };
+  if (payload.signingKeyId) base.signingKeyId = payload.signingKeyId;
+  if (payload.publicKey) base.publicKey = payload.publicKey;
+  return JSON.stringify(sortKeys(base));
 }
 
 export async function signProveClean(payload: ProveCleanPayload): Promise<string> {
@@ -60,9 +74,10 @@ export async function signProveClean(payload: ProveCleanPayload): Promise<string
 }
 
 export async function verifyProveClean(payload: ProveCleanPayload): Promise<boolean> {
-  if (!payload.signature) return false;
+  if (!payload.signature || !payload.publicKey) return false;
   try {
-    const key = await getVerifyKey();
+    const raw = Uint8Array.from(atob(payload.publicKey), (c) => c.charCodeAt(0));
+    const key = await crypto.subtle.importKey("raw", raw, "Ed25519", false, ["verify"]);
     const { signature, ...rest } = payload;
     const data = new TextEncoder().encode(canonicalPayload(rest));
     const sigBytes = Uint8Array.from(atob(signature), (c) => c.charCodeAt(0));

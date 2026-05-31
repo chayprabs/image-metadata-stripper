@@ -43,7 +43,7 @@ RETENTION_SECONDS = int(os.environ.get("RETENTION_SECONDS", "300"))
 MAX_FILE_BYTES = int(os.environ.get("MAX_FILE_BYTES", str(100 * 1024 * 1024)))
 SKIP_METADATA_NAMESPACES = frozenset({"System", "ExifTool", "File"})
 SKIP_METADATA_FIELDS = frozenset({"SourceFile", "ExifToolVersion"})
-VALID_SCRUB_PRESETS = frozenset({"all", "gps_author", "orientation_only"})
+VALID_SCRUB_PRESETS = frozenset({"all", "gps_author", "orientation_only", "custom"})
 
 
 def safe_upload_name(name: str | None) -> str:
@@ -110,7 +110,7 @@ def read_metadata(path: Path, name: str, mime: str) -> dict[str, Any]:
     }
 
 
-def scrub_file(path: Path, preset: str) -> tuple[Path, list[dict], list[dict]]:
+def scrub_file(path: Path, preset: str, custom_fields: list[dict] | None = None) -> tuple[Path, list[dict], list[dict]]:
     before = read_metadata(path, path.name, "application/octet-stream")
     stripped_entries: list[dict] = []
     for block in before["blocks"]:
@@ -142,8 +142,16 @@ def scrub_file(path: Path, preset: str) -> tuple[Path, list[dict], list[dict]]:
         )
     elif preset == "orientation_only":
         run_exiftool(["-all=", "-tagsfromfile", "@", "-orientation", "-overwrite_original", str(out_path)])
+    elif preset == "custom" and custom_fields:
+        args = ["-overwrite_original"]
+        for item in custom_fields:
+            field = item.get("field", "")
+            if field:
+                args.append(f"-{field}=")
+        args.append(str(out_path))
+        run_exiftool(args)
     elif preset == "custom":
-        run_exiftool(["-all=", "-overwrite_original", str(out_path)])
+        run_exiftool(["-overwrite_original", str(out_path)])
     else:
         raise HTTPException(400, f"Unknown preset: {preset}")
 
@@ -208,9 +216,12 @@ async def v1_read(file: UploadFile = File(...)) -> JSONResponse:
 async def v1_scrub(
     file: UploadFile = File(...),
     preset: str = Form("all"),
+    custom: str = Form(None),
 ) -> JSONResponse:
     if preset not in VALID_SCRUB_PRESETS:
         raise HTTPException(400, f"Invalid preset: {preset}")
+
+    custom_fields = json.loads(custom) if custom else None
 
     job_dir = tempfile.mkdtemp(prefix="exifscrub-")
     try:
@@ -221,7 +232,7 @@ async def v1_scrub(
             raise HTTPException(413, "File too large")
         dest.write_bytes(content)
 
-        cleaned_path, stripped, retained = scrub_file(dest, preset)
+        cleaned_path, stripped, retained = scrub_file(dest, preset, custom_fields)
         cleaned_bytes = cleaned_path.read_bytes()
         cleaned_sha = hashlib.sha256(cleaned_bytes).hexdigest()
 
@@ -264,6 +275,9 @@ async def v1_batch(
     import io
     import zipfile
 
+    if preset not in VALID_SCRUB_PRESETS:
+        raise HTTPException(400, f"Invalid preset: {preset}")
+
     content = await file.read()
     if len(content) > MAX_FILE_BYTES:
         raise HTTPException(413, "File too large")
@@ -277,6 +291,10 @@ async def v1_batch(
 
         try:
             with zipfile.ZipFile(input_zip) as zf:
+                for member in zf.namelist():
+                    target = (extract_dir / member).resolve()
+                    if not str(target).startswith(str(extract_dir.resolve())):
+                        raise HTTPException(400, "Invalid zip entry path")
                 zf.extractall(extract_dir)
         except zipfile.BadZipFile:
             raise HTTPException(400, "Invalid zip file")
@@ -313,3 +331,27 @@ async def v1_batch(
         )
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
+
+
+@app.post("/v1/fetch")
+async def v1_fetch(url: str = Form(...)) -> JSONResponse:
+    import httpx
+
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        try:
+            response = await client.get(url)
+        except Exception as exc:
+            raise HTTPException(400, f"Failed to fetch URL: {exc}") from exc
+    if response.status_code != 200:
+        raise HTTPException(400, f"URL returned {response.status_code}")
+
+    filename = url.split("/")[-1].split("?")[0] or "download"
+    content_type = response.headers.get("content-type", "application/octet-stream")
+    return JSONResponse(
+        {
+            "filename": filename,
+            "mime": content_type,
+            "base64": base64.b64encode(response.content).decode(),
+            "size": len(response.content),
+        }
+    )

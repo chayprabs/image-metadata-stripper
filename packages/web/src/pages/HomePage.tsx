@@ -9,9 +9,22 @@ import {
   type ScrubPreset,
   type ScrubResult,
   type Diff,
+  type CustomField,
 } from "@exifscrub/core";
-import { Shield, Upload, Download, FileJson, FlaskConical, Link as LinkIcon } from "lucide-react";
-import { workerScrub, workerRead } from "../api/worker";
+import {
+  Shield,
+  Upload,
+  Download,
+  FileJson,
+  FlaskConical,
+  Link as LinkIcon,
+  Trash2,
+  X,
+  Archive,
+} from "lucide-react";
+import { workerScrub, workerRead, workerFetchUrl, workerBatch } from "../api/worker";
+import WorkerBanner from "../components/WorkerBanner";
+import DiffView from "../components/DiffView";
 
 interface FileJob {
   id: string;
@@ -23,6 +36,7 @@ interface FileJob {
   error?: string;
   loading?: boolean;
   showMetadata?: boolean;
+  showDiff?: boolean;
 }
 
 const PRESETS: { id: ScrubPreset; label: string }[] = [
@@ -35,7 +49,19 @@ const PRESETS: { id: ScrubPreset; label: string }[] = [
 const SAMPLES = [
   { name: "geotagged.jpg", label: "Geotagged JPEG", path: "/samples/geotagged.jpg" },
   { name: "pdf-with-author.pdf", label: "PDF with Author", path: "/samples/pdf-with-author.pdf" },
+  { name: "mp3-with-id3.mp3", label: "MP3 with ID3", path: "/samples/mp3-with-id3.mp3" },
 ];
+
+function parseCustomFields(text: string): CustomField[] {
+  return text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => {
+      const [namespace, field] = l.split(":");
+      return { namespace: namespace ?? "EXIF", field: field ?? l };
+    });
+}
 
 export default function HomePage() {
   const [jobs, setJobs] = useState<FileJob[]>([]);
@@ -44,6 +70,13 @@ export default function HomePage() {
   const [customFields, setCustomFields] = useState("");
   const [urlInput, setUrlInput] = useState("");
   const [urlError, setUrlError] = useState<string | null>(null);
+  const [sampleError, setSampleError] = useState<string | null>(null);
+  const [batchLoading, setBatchLoading] = useState(false);
+
+  const scrubOpts = {
+    preset,
+    custom: preset === "custom" ? parseCustomFields(customFields) : undefined,
+  };
 
   const addFiles = useCallback((files: FileList | File[]) => {
     const list = Array.from(files);
@@ -53,9 +86,7 @@ export default function HomePage() {
       mode: getProcessingMode(file.type, file.name),
     }));
     setJobs((prev) => [...prev, ...newJobs]);
-    for (const job of newJobs) {
-      if (job.mode === "browser") void loadMetadata(job);
-    }
+    for (const job of newJobs) void loadMetadata(job);
   }, []);
 
   async function loadMetadata(job: FileJob) {
@@ -83,37 +114,21 @@ export default function HomePage() {
         job.report ??
         (job.mode === "browser" ? await read(job.file) : await workerRead(job.file));
 
-      const scrubOpts = {
-        preset,
-        custom:
-          preset === "custom"
-            ? customFields
-                .split("\n")
-                .map((l) => l.trim())
-                .filter(Boolean)
-                .map((l) => {
-                  const [namespace, field] = l.split(":");
-                  return { namespace: namespace ?? "EXIF", field: field ?? l };
-                })
-            : undefined,
-      };
-
       const result =
         job.mode === "browser"
           ? await scrub(job.file, scrubOpts)
-          : await workerScrub(job.file, preset);
+          : await workerScrub(job.file, preset, scrubOpts.custom);
 
       const cleanedFile = new File([result.cleanedBlob], job.file.name, {
         type: job.file.type || before.file.mime,
       });
       const after =
         job.mode === "browser" ? await read(cleanedFile) : await workerRead(cleanedFile);
-      const diffResult = diff(before, after);
 
       updateJob(job.id, {
         scrubResult: result,
         report: before,
-        diffResult,
+        diffResult: diff(before, after),
         loading: false,
       });
     } catch (e) {
@@ -124,22 +139,37 @@ export default function HomePage() {
     }
   }
 
+  async function handleScrubAll() {
+    for (const job of jobs.filter((j) => !j.scrubResult && !j.loading)) {
+      await handleScrub(job);
+    }
+  }
+
+  async function handleBatchZip(zipFile: File) {
+    setBatchLoading(true);
+    try {
+      const blob = await workerBatch(zipFile, preset);
+      triggerDownload(blob, "exif-scrub-batch.zip");
+    } catch (e) {
+      setSampleError(e instanceof Error ? e.message : "Batch failed");
+    } finally {
+      setBatchLoading(false);
+    }
+  }
+
   function downloadCleaned(job: FileJob) {
     if (!job.scrubResult) return;
-    const url = URL.createObjectURL(job.scrubResult.cleanedBlob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `clean-${job.file.name}`;
-    a.click();
-    URL.revokeObjectURL(url);
+    triggerDownload(job.scrubResult.cleanedBlob, `clean-${job.file.name}`);
   }
 
   function downloadProveCleanJson(job: FileJob) {
     if (!job.scrubResult) return;
-    const blob = new Blob([JSON.stringify(job.scrubResult.proveCleanJson, null, 2)], {
-      type: "application/json",
-    });
-    triggerDownload(blob, `prove-clean-${job.file.name}.json`);
+    triggerDownload(
+      new Blob([JSON.stringify(job.scrubResult.proveCleanJson, null, 2)], {
+        type: "application/json",
+      }),
+      `prove-clean-${job.file.name}.json`,
+    );
   }
 
   async function downloadProveCleanReport(job: FileJob) {
@@ -149,24 +179,33 @@ export default function HomePage() {
   }
 
   async function loadSample(sample: (typeof SAMPLES)[0]) {
+    setSampleError(null);
     try {
       const res = await fetch(sample.path);
+      if (!res.ok) throw new Error(`Sample not found (${res.status})`);
       const blob = await res.blob();
       addFiles([new File([blob], sample.name, { type: blob.type || "application/octet-stream" })]);
-    } catch {
-      /* sample unavailable */
+    } catch (e) {
+      setSampleError(e instanceof Error ? e.message : "Sample unavailable");
     }
   }
 
   async function loadFromUrl() {
     if (!urlInput.trim()) return;
     setUrlError(null);
+    const url = urlInput.trim();
     try {
-      const res = await fetch(urlInput.trim());
-      if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
-      const blob = await res.blob();
-      const name = urlInput.split("/").pop() || "download";
-      addFiles([new File([blob], name, { type: blob.type || "application/octet-stream" })]);
+      const isSameOrigin = url.startsWith(window.location.origin) || url.startsWith("/");
+      if (isSameOrigin) {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
+        const blob = await res.blob();
+        const name = url.split("/").pop() || "download";
+        addFiles([new File([blob], name, { type: blob.type || "application/octet-stream" })]);
+      } else {
+        const file = await workerFetchUrl(url);
+        addFiles([file]);
+      }
       setUrlInput("");
     } catch (e) {
       setUrlError(e instanceof Error ? e.message : "Could not load URL");
@@ -184,6 +223,8 @@ export default function HomePage() {
 
   return (
     <div className="tool-card">
+      <WorkerBanner />
+
       <div
         className={`drop-zone ${dragOver ? "dragover" : ""}`}
         onDragOver={(e) => {
@@ -197,9 +238,8 @@ export default function HomePage() {
           if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
         }}
         onClick={() => document.getElementById("file-input")?.click()}
-        onKeyDown={(e) => e.key === "Enter" && document.getElementById("file-input")?.click()}
-        role="button"
         tabIndex={0}
+        onKeyDown={(e) => e.key === "Enter" && document.getElementById("file-input")?.click()}
         aria-label="Drop files or click to upload"
       >
         <Upload size={32} strokeWidth={1.5} style={{ margin: "0 auto 0.5rem", opacity: 0.5 }} />
@@ -211,8 +251,11 @@ export default function HomePage() {
           id="file-input"
           type="file"
           multiple
-          accept="image/*,.pdf,.mp3,.mp4,.mov,.flac,.wav,.heic,.heif"
-          onChange={(e) => e.target.files && addFiles(e.target.files)}
+          accept="image/*,.pdf,.mp3,.mp4,.mov,.flac,.wav,.heic,.heif,.zip"
+          onChange={(e) => {
+            if (e.target.files) addFiles(e.target.files);
+            e.target.value = "";
+          }}
         />
       </div>
 
@@ -225,18 +268,19 @@ export default function HomePage() {
           </button>
         ))}
       </div>
+      {sampleError && <p className="error-msg">{sampleError}</p>}
 
       <div className="url-row">
         <LinkIcon size={14} />
         <input
           type="url"
-          placeholder="Paste file URL (server processing)"
+          placeholder="Paste file URL (uses server for external links)"
           value={urlInput}
           onChange={(e) => setUrlInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && loadFromUrl()}
         />
-        <button type="button" className="btn-secondary" onClick={loadFromUrl}>
-          Load
+        <button type="button" className="btn-secondary" aria-label="Load file from URL" onClick={loadFromUrl}>
+          Load URL
         </button>
       </div>
       {urlError && <p className="error-msg">{urlError}</p>}
@@ -264,48 +308,76 @@ export default function HomePage() {
         />
       )}
 
+      {jobs.length > 0 && (
+        <div className="actions-row" style={{ marginBottom: "0.75rem" }}>
+          <button type="button" className="btn-primary" onClick={handleScrubAll}>
+            <Shield size={14} /> Scrub all ({jobs.length})
+          </button>
+          <button type="button" className="btn-secondary" onClick={() => setJobs([])}>
+            <Trash2 size={14} /> Clear all
+          </button>
+          <label className="btn-secondary" style={{ cursor: "pointer" }}>
+            <Archive size={14} /> Batch ZIP
+            <input
+              type="file"
+              accept=".zip"
+              hidden
+              onChange={(e) => e.target.files?.[0] && handleBatchZip(e.target.files[0])}
+            />
+          </label>
+          {batchLoading && <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>Batch processing…</span>}
+        </div>
+      )}
+
       {jobs.map((job) => (
         <div key={job.id} className="file-row">
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "flex-start",
-              gap: "0.5rem",
-            }}
-          >
-            <div>
-              <strong>{job.file.name}</strong>
-              <span style={{ marginLeft: "0.5rem", fontSize: "0.8rem", color: "var(--muted)" }}>
-                {(job.file.size / 1024).toFixed(1)} KB
-              </span>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.5rem" }}>
+            <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-start" }}>
+              {job.report?.thumbnails?.[0] && (
+                <img
+                  src={job.report.thumbnails[0].dataUrl}
+                  alt=""
+                  style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6 }}
+                />
+              )}
+              <div>
+                <strong>{job.file.name}</strong>
+                <span style={{ marginLeft: "0.5rem", fontSize: "0.8rem", color: "var(--muted)" }}>
+                  {(job.file.size / 1024).toFixed(1)} KB
+                  {job.report && ` · ${job.report.blocks.length} blocks`}
+                </span>
+                {job.report && (
+                  <p style={{ margin: "0.2rem 0 0", fontSize: "0.75rem", color: "var(--muted)", fontFamily: "monospace" }}>
+                    sha256: {job.report.file.sha256.slice(0, 16)}…
+                  </p>
+                )}
+              </div>
             </div>
-            <span className={job.mode === "browser" ? "badge badge-browser" : "badge badge-worker"}>
-              {job.mode === "browser" ? "In browser" : "Server"}
-            </span>
+            <div style={{ display: "flex", gap: "0.35rem", alignItems: "center" }}>
+              <span className={job.mode === "browser" ? "badge badge-browser" : "badge badge-worker"}>
+                {job.mode === "browser" ? "In browser" : "Server"}
+              </span>
+              <button type="button" className="preset-btn" aria-label="Remove file" onClick={() => setJobs((p) => p.filter((j) => j.id !== job.id))}>
+                <X size={14} />
+              </button>
+            </div>
           </div>
 
           {job.loading && <p style={{ fontSize: "0.85rem", color: "var(--muted)" }}>Processing…</p>}
           {job.error && <p className="error-msg">{job.error}</p>}
 
           <div className="actions-row">
-            <button
-              type="button"
-              className="btn-primary"
-              disabled={job.loading}
-              onClick={() => handleScrub(job)}
-            >
-              <Shield size={16} />
-              Scrub metadata
+            <button type="button" className="btn-primary" disabled={job.loading} onClick={() => handleScrub(job)}>
+              <Shield size={16} /> Scrub metadata
             </button>
             <button
               type="button"
               className="btn-secondary"
               disabled={job.loading}
               onClick={() => {
-                const showMetadata = !job.showMetadata;
-                updateJob(job.id, { showMetadata });
-                if (showMetadata && !job.report) void loadMetadata(job);
+                const show = !job.showMetadata;
+                updateJob(job.id, { showMetadata: show });
+                if (show && !job.report) void loadMetadata(job);
               }}
             >
               View metadata
@@ -325,24 +397,17 @@ export default function HomePage() {
                 <FileJson size={14} /> Prove-clean JSON
               </button>
               <button type="button" className="btn-secondary" onClick={() => downloadProveCleanReport(job)}>
-                <Download size={14} /> Prove-clean report (TXT)
+                <Download size={14} /> Prove-clean PDF
               </button>
             </div>
           )}
 
           {job.diffResult && (
-            <details style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
-              <summary>
-                Metadata diff (
-                {job.diffResult.entries.filter((entry) => entry.status === "removed").length} removed)
+            <details open={job.showDiff} style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
+              <summary onClick={() => updateJob(job.id, { showDiff: !job.showDiff })}>
+                Metadata diff ({job.diffResult.entries.filter((e) => e.status === "removed").length} removed)
               </summary>
-              <pre className="metadata-panel">
-                {JSON.stringify(
-                  job.diffResult.entries.filter((entry) => entry.status !== "unchanged"),
-                  null,
-                  2
-                )}
-              </pre>
+              <DiffView diff={job.diffResult} />
             </details>
           )}
         </div>
