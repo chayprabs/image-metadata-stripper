@@ -24,6 +24,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+VALID_PRESETS = {"all", "gps_author", "orientation_only", "custom"}
+NON_METADATA_NAMESPACES = {"ExifTool", "System", "File", "Composite"}
+
+
+def field_keys(blocks: list[dict]) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
+    for block in blocks:
+        ns = block["namespace"]
+        if ns in NON_METADATA_NAMESPACES:
+            continue
+        for field in block["fields"]:
+            keys.add((ns, field))
+    return keys
+
 HMAC_SECRET = os.environ.get("EXIFSCRUB_HMAC_SECRET", "dev-secret-change-me").encode()
 RETENTION_SECONDS = int(os.environ.get("RETENTION_SECONDS", "300"))
 MAX_FILE_BYTES = int(os.environ.get("MAX_FILE_BYTES", str(100 * 1024 * 1024)))
@@ -116,6 +130,8 @@ def scrub_file(path: Path, preset: str) -> tuple[Path, list[dict], list[dict]]:
                 "-GPS:all=",
                 "-XMP:Creator=",
                 "-XMP:Author=",
+                "-Creator=",
+                "-PDF:Creator=",
                 "-Artist=",
                 "-Author=",
                 "-OwnerName=",
@@ -126,23 +142,31 @@ def scrub_file(path: Path, preset: str) -> tuple[Path, list[dict], list[dict]]:
         )
     elif preset == "orientation_only":
         run_exiftool(["-all=", "-tagsfromfile", "@", "-orientation", "-overwrite_original", str(out_path)])
-    else:
+    elif preset == "custom":
         run_exiftool(["-all=", "-overwrite_original", str(out_path)])
+    else:
+        raise HTTPException(400, f"Unknown preset: {preset}")
 
     after = read_metadata(out_path, path.name, "application/octet-stream")
-    retained: list[dict] = []
+    retained_list: list[dict] = []
     for block in after["blocks"]:
         for field, value in block["fields"].items():
-            retained.append({"namespace": block["namespace"], "field": field, "value": value})
+            retained_list.append({"namespace": block["namespace"], "field": field, "value": value})
+
+    before_keys = field_keys(before["blocks"])
+    after_keys = field_keys(after["blocks"])
+
+    stripped = [
+        entry for entry in stripped_entries
+        if (entry["namespace"], entry["field"]) in before_keys - after_keys
+    ]
 
     if preset == "all":
-        stripped = stripped_entries
+        retained = []
     else:
-        retained_keys = {(r["namespace"], r["field"]) for r in retained}
-        stripped = [
-            s
-            for s in stripped_entries
-            if (s["namespace"], s["field"]) not in retained_keys
+        retained = [
+            entry for entry in retained_list
+            if (entry["namespace"], entry["field"]) in after_keys
         ]
 
     return out_path, stripped, retained
@@ -251,8 +275,11 @@ async def v1_batch(
         extract_dir = Path(job_dir) / "extracted"
         extract_dir.mkdir()
 
-        with zipfile.ZipFile(input_zip) as zf:
-            zf.extractall(extract_dir)
+        try:
+            with zipfile.ZipFile(input_zip) as zf:
+                zf.extractall(extract_dir)
+        except zipfile.BadZipFile:
+            raise HTTPException(400, "Invalid zip file")
 
         manifest: list[dict[str, Any]] = []
         output_buf = io.BytesIO()

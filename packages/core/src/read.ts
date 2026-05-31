@@ -91,7 +91,7 @@ export async function read(file: File): Promise<MetadataReport> {
     file: {
       name: file.name,
       sha256,
-      mime: file.type || guessMime(file.name),
+      mime: file.type && file.type !== "application/octet-stream" ? file.type : guessMime(file.name),
       size: file.size,
     },
     blocks,

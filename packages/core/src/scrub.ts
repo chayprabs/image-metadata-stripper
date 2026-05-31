@@ -127,6 +127,10 @@ async function scrubJpeg(file: File, opts: ScrubOptions): Promise<Blob> {
     return dataUrlToBlob(inserted, "image/jpeg");
   }
 
+  if (opts.preset === "custom") {
+    return dataUrlToBlob(dataUrl, "image/jpeg");
+  }
+
   return dataUrlToBlob(piexif.remove(dataUrl), "image/jpeg");
 }
 
@@ -136,6 +140,7 @@ function stripGpsAuthorFromExif(exifObj: piexif.IExif): void {
     piexif.ImageIFD.Artist,
     piexif.ImageIFD.Copyright,
     piexif.ImageIFD.ImageDescription,
+    piexif.ImageIFD.Software,
   ];
   for (const tag of removeFrom0th) {
     if (exifObj["0th"]?.[tag] !== undefined) delete exifObj["0th"][tag];
@@ -150,9 +155,12 @@ function stripGpsAuthorFromExif(exifObj: piexif.IExif): void {
   }
 }
 
-<<<<<<< HEAD
 function applyCustomExifRemoval(exifObj: piexif.IExif, custom: CustomField[]): void {
-  for (const { field } of custom) {
+  for (const { namespace, field } of custom) {
+    if (namespace === "GPS") {
+      exifObj.GPS = {};
+      continue;
+    }
     deleteExifField(exifObj, field);
   }
 }
@@ -168,44 +176,10 @@ function deleteExifField(exifObj: piexif.IExif, field: string): void {
     if (typeof tag !== "number") continue;
     const section = exifObj[key] as Record<number, unknown> | undefined;
     if (section?.[tag] !== undefined) delete section[tag];
-=======
-function applyCustomExifRemoval(
-  exifObj: piexif.IExif,
-  custom: CustomField[],
-  _before: MetadataReport
-): void {
-  const fieldToTag: Record<string, number> = {
-    Orientation: piexif.ImageIFD.Orientation,
-    Artist: piexif.ImageIFD.Artist,
-    Copyright: piexif.ImageIFD.Copyright,
-    ImageDescription: piexif.ImageIFD.ImageDescription,
-    Software: piexif.ImageIFD.Software,
-    Make: piexif.ImageIFD.Make,
-    Model: piexif.ImageIFD.Model,
-    UserComment: piexif.ExifIFD.UserComment,
-    BodySerialNumber: piexif.ExifIFD.BodySerialNumber,
-    LensSerialNumber: piexif.ExifIFD.LensSerialNumber,
-  };
-
-  for (const { namespace, field } of custom) {
-    if (namespace === "GPS") {
-      exifObj.GPS = {};
-      continue;
-    }
-    const tag = fieldToTag[field];
-    if (tag !== undefined) {
-      if (exifObj["0th"]?.[tag] !== undefined) delete exifObj["0th"][tag];
-      if (exifObj.Exif?.[tag] !== undefined) delete exifObj.Exif[tag];
-    }
->>>>>>> 8f265d0 (feat: complete PRD gaps - PDF prove-clean, batch, custom preset, samples, e2e)
   }
 }
 
 async function scrubViaCanvas(file: File, opts: ScrubOptions, mime: string): Promise<Blob> {
-  if (opts.preset === "orientation_only" && (mime === "image/jpeg" || file.name.match(/\.jpe?g$/i))) {
-    return scrubJpeg(file, opts, await read(file));
-  }
-
   if (typeof document === "undefined") {
     return new Blob([await file.arrayBuffer()], { type: mime });
   }

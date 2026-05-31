@@ -43,6 +43,7 @@ export default function HomePage() {
   const [dragOver, setDragOver] = useState(false);
   const [customFields, setCustomFields] = useState("");
   const [urlInput, setUrlInput] = useState("");
+  const [urlError, setUrlError] = useState<string | null>(null);
 
   const addFiles = useCallback((files: FileList | File[]) => {
     const list = Array.from(files);
@@ -159,14 +160,16 @@ export default function HomePage() {
 
   async function loadFromUrl() {
     if (!urlInput.trim()) return;
+    setUrlError(null);
     try {
       const res = await fetch(urlInput.trim());
+      if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
       const blob = await res.blob();
       const name = urlInput.split("/").pop() || "download";
       addFiles([new File([blob], name, { type: blob.type || "application/octet-stream" })]);
       setUrlInput("");
-    } catch {
-      /* fetch failed */
+    } catch (e) {
+      setUrlError(e instanceof Error ? e.message : "Could not load URL");
     }
   }
 
@@ -236,6 +239,7 @@ export default function HomePage() {
           Load
         </button>
       </div>
+      {urlError && <p className="error-msg">{urlError}</p>}
 
       <div className="preset-row" role="group" aria-label="Privacy preset">
         {PRESETS.map((p) => (
