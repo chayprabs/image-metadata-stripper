@@ -1,0 +1,19 @@
+{
+  "name": "image-metadata-stripper",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Remove EXIF, GPS, XMP, IPTC and MakerNotes metadata from images and media — privacy presets and prove-clean reports.",
+  "license": "MIT",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "dev": "pnpm --filter @exifscrub/web dev",
+    "lint": "pnpm -r run lint",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "test:unit": "pnpm --filter @exifscrub/core test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@9.15.0"
+}
