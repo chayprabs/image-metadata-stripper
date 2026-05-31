@@ -70,6 +70,10 @@ pnpm build
 - `packages/core`, `packages/web`, `packages/cli`: **MIT** ([LICENSE](LICENSE))
 - `apps/worker`: **AGPL-3.0** ([apps/worker/LICENSE](apps/worker/LICENSE))
 
+See also [LEGAL.md](LEGAL.md), [DISCLAIMER.md](DISCLAIMER.md), [NOTICE.md](NOTICE.md), and the in-app [Privacy Policy](https://chayprabs.github.io/image-metadata-stripper/privacy), [Terms](https://chayprabs.github.io/image-metadata-stripper/terms), and [Legal & Licenses](https://chayprabs.github.io/image-metadata-stripper/legal) pages.
+
+**Disclaimer:** ExifScrub is provided AS IS without warranty. Metadata removal is not guaranteed to be complete. Prove-clean reports are informational only, not legal certifications. You are responsible for verifying outputs before publishing sensitive material.
+
 ## Topics
 
 `exif` `metadata` `metadata-remover` `gps` `privacy` `xmp` `iptc` `makernotes` `exif-scrubber` `image-privacy` `pdf-metadata` `mp4-metadata` `id3` `online-tool`

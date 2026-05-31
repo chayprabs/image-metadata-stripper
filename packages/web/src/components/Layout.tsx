@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { Github, Globe } from "lucide-react";
 import type { ReactNode } from "react";
+import { LEGAL } from "../content/legal-constants";
 
 const GITHUB_URL = "https://github.com/chayprabs/image-metadata-stripper";
 const TWITTER_URL = "https://x.com/chayprabs";
@@ -46,6 +47,11 @@ export default function Layout({ children }: { children: ReactNode }) {
       <footer className="footer-legal">
         <Link to="/privacy">Privacy Policy</Link>
         <Link to="/terms">Terms &amp; Conditions</Link>
+        <Link to="/legal">Legal &amp; Licenses</Link>
+        <p style={{ margin: "0.75rem 0 0", fontSize: "0.75rem", color: "var(--muted)", maxWidth: "48rem" }}>
+          By using {LEGAL.productName} you agree to the Terms &amp; Privacy Policy. Software is provided AS
+          IS without warranty; verify outputs before publishing sensitive files.
+        </p>
       </footer>
     </div>
   );

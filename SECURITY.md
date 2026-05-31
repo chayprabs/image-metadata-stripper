@@ -12,6 +12,10 @@ Please report security issues privately via GitHub Security Advisories on this r
 
 Do not open public issues for undisclosed vulnerabilities.
 
+## Legal
+
+Use of the hosted service is subject to the [Terms & Conditions](packages/web/src/pages/TermsPage.tsx) and [Privacy Policy](packages/web/src/pages/PrivacyPage.tsx). See [LEGAL.md](LEGAL.md) and [DISCLAIMER.md](DISCLAIMER.md).
+
 ## Scope
 
 - Browser-side processing must not exfiltrate file contents without user action.

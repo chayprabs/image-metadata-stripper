@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 test("homepage loads", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("ExifScrub")).toBeVisible();
+  await expect(page.getByRole("link", { name: "ExifScrub" })).toBeVisible();
 });
 
 test("drop zone and presets visible", async ({ page }) => {
@@ -16,11 +16,13 @@ test("sample picker present", async ({ page }) => {
   await expect(page.getByText("Geotagged JPEG")).toBeVisible();
 });
 
-test("privacy and terms pages", async ({ page }) => {
+test("privacy, terms, and legal pages", async ({ page }) => {
   await page.goto("/privacy");
   await expect(page.getByRole("heading", { name: /Privacy Policy/i })).toBeVisible();
   await page.goto("/terms");
   await expect(page.getByRole("heading", { name: /Terms/i })).toBeVisible();
+  await page.goto("/legal");
+  await expect(page.getByRole("heading", { name: /Legal & Licenses/i })).toBeVisible();
 });
 
 test("all seo routes load", async ({ page }) => {

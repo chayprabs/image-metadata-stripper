@@ -1,3 +1,5 @@
+SPDX-License-Identifier: AGPL-3.0-only
+
 GNU AFFERO GENERAL PUBLIC LICENSE
 Version 3, 19 November 2007
 
@@ -15,3 +17,16 @@ GNU Affero General Public License for more details.
 
 You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+---
+
+Full license text: https://www.gnu.org/licenses/agpl-3.0.txt
+
+This worker integrates with ExifTool and optionally FFmpeg, which are
+licensed under their own terms. See NOTICE.md in the repository root.
+
+When you offer this worker as a network service, AGPL-3.0 requires that
+users interacting with it over a network receive access to the corresponding
+source code for the version you run.
+
+See also DISCLAIMER.md for limitations on metadata removal guarantees.

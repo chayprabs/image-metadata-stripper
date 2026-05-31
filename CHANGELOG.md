@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1 — 2026-05-31
+
+### Added
+- Comprehensive Privacy Policy (GDPR, CCPA, LGPD, international rights)
+- Comprehensive Terms & Conditions (liability cap, indemnification, governing law)
+- Legal & Licenses page (`/legal`), LEGAL.md, DISCLAIMER.md, NOTICE.md
+- Footer acceptance notice and SPDX license identifiers
+
 ## 1.0.0 — 2026-05-31
 
 ### Added
