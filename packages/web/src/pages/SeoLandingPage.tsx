@@ -37,9 +37,15 @@ export default function SeoLandingPage({ slug }: { slug: string }) {
 
   useEffect(() => {
     if (!content) return;
+    const defaultTitle = "ExifScrub — Remove image & file metadata online";
     document.title = `${content.title} — ExifScrub`;
     const meta = document.querySelector('meta[name="description"]');
+    const prevDescription = meta?.getAttribute("content") ?? "";
     if (meta) meta.setAttribute("content", content.body);
+    return () => {
+      document.title = defaultTitle;
+      if (meta) meta.setAttribute("content", prevDescription);
+    };
   }, [content]);
 
   if (!content) return null;

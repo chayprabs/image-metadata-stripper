@@ -53,18 +53,19 @@ for (const preset of ["all", "gps_author", "orientation_only"]) {
   } else pass(`prove-clean valid (${preset})`);
 }
 
-console.log("\n=== 2. custom preset empty vs populated (JPEG vs PNG) ===\n");
+console.log("\n=== 2. custom preset empty throws validation error ===\n");
 
-const jpegEmpty = await scrub(geoFile(), { preset: "custom" });
-const jpegEmptyBuf = new Uint8Array(await jpegEmpty.cleanedBlob.arrayBuffer());
-const geotaggedBuf = new Uint8Array(geotagged);
-const jpegEmptySame =
-  jpegEmptyBuf.length === geotaggedBuf.length && jpegEmptyBuf.every((v, i) => v === geotaggedBuf[i]);
-console.log(`JPEG custom empty: stripped=${jpegEmpty.stripped.length} bytesUnchanged=${jpegEmptySame}`);
-if (!jpegEmptySame) {
-  fail("JPEG custom empty should passthrough");
-  bug("BUG-002", "medium", "scrub.ts:123-125", "JPEG custom with no fields should return original", "scrub geotagged.jpg {preset:'custom'}", "original bytes", "modified bytes");
-} else pass("JPEG custom empty passthrough");
+try {
+  await scrub(geoFile(), { preset: "custom" });
+  fail("JPEG custom empty should throw");
+  bug("BUG-002", "medium", "scrub.ts:27-29", "JPEG custom with no fields should throw", "scrub geotagged.jpg {preset:'custom'}", "ScrubValidationError", "no throw");
+} catch (e) {
+  if (e?.name === "ScrubValidationError" || String(e?.message).includes("at least one field")) {
+    pass("JPEG custom empty throws ScrubValidationError");
+  } else {
+    fail("JPEG custom empty unexpected error", String(e?.message));
+  }
+}
 
 // PNG with metadata
 const basePng = new Uint8Array(readFileSync(join(root, "node_modules/.pnpm/png-chunks-extract@1.0.0/node_modules/png-chunks-extract/test.png")));

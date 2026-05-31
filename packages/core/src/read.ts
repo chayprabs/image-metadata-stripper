@@ -110,6 +110,7 @@ function guessMime(name: string): string {
     tiff: "image/tiff",
     gif: "image/gif",
     avif: "image/avif",
+    bmp: "image/bmp",
     pdf: "application/pdf",
     mp3: "audio/mpeg",
     mp4: "video/mp4",

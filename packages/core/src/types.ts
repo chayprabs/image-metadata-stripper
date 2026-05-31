@@ -77,6 +77,7 @@ export const BROWSER_MIMES = new Set([
   "image/tiff",
   "image/gif",
   "image/avif",
+  "image/bmp",
 ]);
 
 export const WORKER_MIMES = new Set([
@@ -91,12 +92,12 @@ export const WORKER_MIMES = new Set([
 ]);
 
 export function getProcessingMode(mime: string, filename: string): ProcessingMode {
+  if (WORKER_MIMES.has(mime)) return "worker";
   if (BROWSER_MIMES.has(mime)) return "browser";
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-  const browserExts = ["jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "tif", "gif", "avif"];
-  if (browserExts.includes(ext)) return "browser";
   const workerExts = ["pdf", "mp3", "flac", "mp4", "mov", "wav"];
   if (workerExts.includes(ext)) return "worker";
-  if (WORKER_MIMES.has(mime)) return "worker";
+  const browserExts = ["jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "tif", "gif", "avif", "bmp"];
+  if (browserExts.includes(ext)) return "browser";
   return "browser";
 }

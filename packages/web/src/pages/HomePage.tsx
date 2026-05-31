@@ -32,13 +32,14 @@ interface FileJob {
   file: File;
   mode: "browser" | "worker";
   report?: MetadataReport;
+  reportBefore?: MetadataReport;
+  reportAfter?: MetadataReport;
   scrubResult?: ScrubResult;
   diffResult?: Diff;
   error?: string;
   loading?: boolean;
   showMetadata?: boolean;
   showDiff?: boolean;
-  scrubPreset?: ScrubPreset;
 }
 
 const PRESETS: { id: ScrubPreset; label: string }[] = [
@@ -63,8 +64,11 @@ export function parseCustomFields(text: string): CustomField[] {
     .map((l) => {
       const idx = l.indexOf(":");
       if (idx === -1) return { namespace: "EXIF", field: l };
-      return { namespace: l.slice(0, idx), field: l.slice(idx + 1) };
-    });
+      const namespace = l.slice(0, idx);
+      const field = l.slice(idx + 1);
+      return { namespace: namespace || "EXIF", field };
+    })
+    .filter((c) => c.field.trim().length > 0);
 }
 
 export default function HomePage() {
@@ -88,7 +92,7 @@ export default function HomePage() {
         scrubResult: undefined,
         diffResult: undefined,
         showDiff: undefined,
-        scrubPreset: undefined,
+        reportAfter: undefined,
       })),
     );
   }, [preset, customFields]);
@@ -149,9 +153,10 @@ export default function HomePage() {
 
       updateJob(job.id, {
         scrubResult: result,
-        report: before,
+        reportBefore: before,
+        reportAfter: after,
+        report: after,
         diffResult: diff(before, after),
-        scrubPreset: preset,
         showDiff: true,
         loading: false,
       });
@@ -313,9 +318,9 @@ export default function HomePage() {
           onChange={(e) => setUrlInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && loadFromUrl()}
         />
-        <button type="button" className="btn-secondary" aria-label="Load file from URL" onClick={loadFromUrl}>
-          Load URL
-        </button>
+          <button type="button" className="btn-secondary" aria-label="Load URL" onClick={loadFromUrl}>
+            Load URL
+          </button>
       </div>
       {urlError && <p className="error-msg">{urlError}</p>}
 
@@ -348,7 +353,12 @@ export default function HomePage() {
             <button type="button" className="btn-primary" onClick={handleScrubAll}>
               <Shield size={14} /> Scrub all ({jobs.length})
             </button>
-            <button type="button" className="btn-secondary" onClick={() => setJobs([])}>
+            <button type="button" className="btn-secondary" onClick={() => {
+            setJobs([]);
+            setSampleError(null);
+            setUrlError(null);
+            setBatchError(null);
+          }}>
               <Trash2 size={14} /> Clear all
             </button>
           </>
@@ -359,7 +369,11 @@ export default function HomePage() {
             type="file"
             accept=".zip"
             hidden
-            onChange={(e) => e.target.files?.[0] && handleBatchZip(e.target.files[0])}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handleBatchZip(f);
+              e.target.value = "";
+            }}
           />
         </label>
         {batchLoading && <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>Batch processing…</span>}
@@ -385,7 +399,7 @@ export default function HomePage() {
                 </span>
                 {job.report && (
                   <p style={{ margin: "0.2rem 0 0", fontSize: "0.75rem", color: "var(--muted)", fontFamily: "monospace" }}>
-                    sha256: {job.report.file.sha256.slice(0, 16)}…
+                    sha256: {(job.reportAfter ?? job.report).file.sha256.slice(0, 16)}…
                   </p>
                 )}
               </div>
@@ -421,17 +435,12 @@ export default function HomePage() {
             </button>
           </div>
 
-          {job.showMetadata && job.report && (
-            <pre className="metadata-panel">{JSON.stringify(job.report.blocks, null, 2)}</pre>
+          {job.showMetadata && (job.reportAfter ?? job.report) && (
+            <pre className="metadata-panel">{JSON.stringify((job.reportAfter ?? job.report)!.blocks, null, 2)}</pre>
           )}
 
           {job.scrubResult && (
             <div className="actions-row" style={{ marginTop: "0.5rem" }}>
-              {job.scrubPreset && job.scrubPreset !== preset && (
-                <span style={{ fontSize: "0.8rem", color: "var(--muted)", alignSelf: "center" }}>
-                  Results from preset &quot;{job.scrubPreset}&quot; — re-scrub after changing preset
-                </span>
-              )}
               <button type="button" className="btn-secondary" onClick={() => downloadCleaned(job)}>
                 <Download size={14} /> Cleaned file
               </button>

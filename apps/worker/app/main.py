@@ -44,6 +44,8 @@ MAX_FILE_BYTES = int(os.environ.get("MAX_FILE_BYTES", str(100 * 1024 * 1024)))
 SKIP_METADATA_NAMESPACES = frozenset({"System", "ExifTool", "File"})
 SKIP_METADATA_FIELDS = frozenset({"SourceFile", "ExifToolVersion"})
 VALID_SCRUB_PRESETS = frozenset({"all", "gps_author", "orientation_only", "custom"})
+ORIENTATION_NOOP_SUFFIXES = frozenset({".pdf", ".mp3", ".mp4", ".mov", ".wav", ".flac"})
+AUTHOR_LIKE_FIELDS = frozenset({"artist", "author", "creator", "ownername", "copyright", "owner"})
 
 
 def safe_upload_name(name: str | None) -> str:
@@ -127,7 +129,7 @@ def scrub_mp3(path: Path, out_path: Path, preset: str, custom_fields: list[dict]
                     args.extend(["-metadata", "title="])
                 if "album" in field:
                     args.extend(["-metadata", "album="])
-            if len(args) == 6:
+            if len(args) == 5:
                 run_ffmpeg(["-y", "-i", str(path), "-map_metadata", "-1", "-codec", "copy", str(tmp)])
             else:
                 args.append(str(tmp))
@@ -205,13 +207,33 @@ def scrub_file(path: Path, preset: str, custom_fields: list[dict] | None = None)
             ]
         )
     elif preset == "orientation_only":
-        run_exiftool(["-all=", "-tagsfromfile", "@", "-orientation", "-overwrite_original", str(out_path)])
+        if path.suffix.lower() not in ORIENTATION_NOOP_SUFFIXES:
+            run_exiftool(["-all=", "-tagsfromfile", "@", "-orientation", "-overwrite_original", str(out_path)])
     elif preset == "custom" and custom_fields:
         args = ["-overwrite_original"]
+        extra_tags: list[str] = []
         for item in custom_fields:
             field = item.get("field", "")
             if field:
                 args.append(f"-{field}=")
+                bare = field.split(":")[-1].lower()
+                if bare in AUTHOR_LIKE_FIELDS:
+                    extra_tags.extend(
+                        [
+                            "-Artist=",
+                            "-Author=",
+                            "-Creator=",
+                            "-XMP:Artist=",
+                            "-XMP:Creator=",
+                            "-XMP:Author=",
+                            "-ItemList:Artist=",
+                            "-PDF:Author=",
+                            "-PDF:Creator=",
+                        ]
+                    )
+        for tag in extra_tags:
+            if tag not in args:
+                args.append(tag)
         args.append(str(out_path))
         run_exiftool(args)
     elif preset == "custom":

@@ -216,6 +216,15 @@ describe("comprehensive: PNG scrub presets", () => {
     }
   });
 
+  it("PNG preset=all strips iCCP chunk", async () => {
+    const result = await scrub(pngFile, { preset: "all" });
+    const chunks = extractChunks(new Uint8Array(await result.cleanedBlob.arrayBuffer())).map((c) => c.name);
+    expect(chunks).not.toContain("iCCP");
+    const after = await read(new File([result.cleanedBlob], "meta.png", { type: "image/png" }));
+    const iccFields = after.blocks.flatMap((b) => Object.keys(b.fields)).filter((f) => f.startsWith("Profile"));
+    expect(iccFields).toEqual([]);
+  });
+
   it("PNG preset=orientation_only strips eXIf chunk", async () => {
     const chunks = extractChunks(pngBytes);
     const exifChunk = { name: "eXIf" as const, data: new Uint8Array([0, 1, 2, 3]) };
@@ -279,6 +288,7 @@ describe("comprehensive: getProcessingMode", () => {
     ["image/avif", "photo.avif", "browser"],
     ["image/bmp", "photo.bmp", "browser"],
     ["application/pdf", "doc.pdf", "worker"],
+    ["application/pdf", "photo.jpg", "worker"],
     ["audio/mpeg", "song.mp3", "worker"],
     ["video/mp4", "clip.mp4", "worker"],
     ["application/octet-stream", "photo.jpg", "browser"],
