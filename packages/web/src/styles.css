@@ -266,6 +266,37 @@ button {
   margin-top: 0.5rem;
 }
 
+.sample-row,
+.url-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.url-row input {
+  flex: 1;
+  min-width: 200px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+}
+
+.custom-fields {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  margin-bottom: 0.75rem;
+  resize: vertical;
+}
+
 @media (max-width: 600px) {
   .topbar {
     flex-direction: column;

@@ -233,5 +233,56 @@ async def v1_scrub(
 
 
 @app.post("/v1/batch")
-async def v1_batch(file: UploadFile = File(...)) -> JSONResponse:
-    raise HTTPException(501, "Batch endpoint available in Pro tier; use single-file scrub for now.")
+async def v1_batch(
+    file: UploadFile = File(...),
+    preset: str = Form("all"),
+) -> JSONResponse:
+    import io
+    import zipfile
+
+    content = await file.read()
+    if len(content) > MAX_FILE_BYTES:
+        raise HTTPException(413, "File too large")
+
+    job_dir = tempfile.mkdtemp(prefix="exifscrub-batch-")
+    try:
+        input_zip = Path(job_dir) / "input.zip"
+        input_zip.write_bytes(content)
+        extract_dir = Path(job_dir) / "extracted"
+        extract_dir.mkdir()
+
+        with zipfile.ZipFile(input_zip) as zf:
+            zf.extractall(extract_dir)
+
+        manifest: list[dict[str, Any]] = []
+        output_buf = io.BytesIO()
+
+        with zipfile.ZipFile(output_buf, "w", zipfile.ZIP_DEFLATED) as out_zip:
+            for fpath in sorted(extract_dir.rglob("*")):
+                if not fpath.is_file():
+                    continue
+                cleaned_path, stripped, retained = scrub_file(fpath, preset)
+                cleaned_bytes = cleaned_path.read_bytes()
+                cleaned_sha = hashlib.sha256(cleaned_bytes).hexdigest()
+                rel = fpath.relative_to(extract_dir)
+                out_zip.writestr(f"clean_{rel}", cleaned_bytes)
+                manifest.append({
+                    "filename": str(rel),
+                    "sha256": cleaned_sha,
+                    "preset": preset,
+                    "stripped_count": len(stripped),
+                    "retained_count": len(retained),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+
+            manifest.sort(key=lambda x: x["filename"])
+            out_zip.writestr("manifest.json", json.dumps(manifest, indent=2))
+
+        return JSONResponse(
+            {
+                "manifest": manifest,
+                "zipBase64": base64.b64encode(output_buf.getvalue()).decode(),
+            }
+        )
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)

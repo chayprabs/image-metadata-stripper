@@ -7,6 +7,7 @@ export {
   signProveClean,
   verifyProveClean,
   proveCleanToPdfText,
+  proveCleanToPdf,
   canonicalPayload,
 } from "./prove-clean.js";
 export { sha256Hex, sha256HexFromBlob } from "./hash.js";

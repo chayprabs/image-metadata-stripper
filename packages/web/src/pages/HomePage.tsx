@@ -4,13 +4,13 @@ import {
   scrub,
   diff,
   getProcessingMode,
-  proveCleanToPdfText,
+  proveCleanToPdf,
   type MetadataReport,
   type ScrubPreset,
   type ScrubResult,
   type Diff,
 } from "@exifscrub/core";
-import { Shield, Upload, Download, FileJson } from "lucide-react";
+import { Shield, Upload, Download, FileJson, FlaskConical, Link as LinkIcon } from "lucide-react";
 import { workerScrub, workerRead } from "../api/worker";
 
 interface FileJob {
@@ -29,12 +29,20 @@ const PRESETS: { id: ScrubPreset; label: string }[] = [
   { id: "all", label: "Strip all" },
   { id: "gps_author", label: "Strip GPS + author" },
   { id: "orientation_only", label: "Keep orientation only" },
+  { id: "custom", label: "Custom" },
+];
+
+const SAMPLES = [
+  { name: "geotagged.jpg", label: "Geotagged JPEG", path: "/samples/geotagged.jpg" },
+  { name: "pdf-with-author.pdf", label: "PDF with Author", path: "/samples/pdf-with-author.pdf" },
 ];
 
 export default function HomePage() {
   const [jobs, setJobs] = useState<FileJob[]>([]);
   const [preset, setPreset] = useState<ScrubPreset>("all");
   const [dragOver, setDragOver] = useState(false);
+  const [customFields, setCustomFields] = useState("");
+  const [urlInput, setUrlInput] = useState("");
 
   const addFiles = useCallback((files: FileList | File[]) => {
     const list = Array.from(files);
@@ -74,9 +82,24 @@ export default function HomePage() {
         job.report ??
         (job.mode === "browser" ? await read(job.file) : await workerRead(job.file));
 
+      const scrubOpts = {
+        preset,
+        custom:
+          preset === "custom"
+            ? customFields
+                .split("\n")
+                .map((l) => l.trim())
+                .filter(Boolean)
+                .map((l) => {
+                  const [namespace, field] = l.split(":");
+                  return { namespace: namespace ?? "EXIF", field: field ?? l };
+                })
+            : undefined,
+      };
+
       const result =
         job.mode === "browser"
-          ? await scrub(job.file, { preset })
+          ? await scrub(job.file, scrubOpts)
           : await workerScrub(job.file, preset);
 
       const cleanedFile = new File([result.cleanedBlob], job.file.name, {
@@ -118,11 +141,33 @@ export default function HomePage() {
     triggerDownload(blob, `prove-clean-${job.file.name}.json`);
   }
 
-  function downloadProveCleanReport(job: FileJob) {
+  async function downloadProveCleanReport(job: FileJob) {
     if (!job.scrubResult) return;
-    const text = proveCleanToPdfText(job.scrubResult.proveCleanJson);
-    const blob = new Blob([text], { type: "text/plain" });
-    triggerDownload(blob, `prove-clean-${job.file.name}.txt`);
+    const pdf = await proveCleanToPdf(job.scrubResult.proveCleanJson);
+    triggerDownload(pdf, `prove-clean-${job.file.name}.pdf`);
+  }
+
+  async function loadSample(sample: (typeof SAMPLES)[0]) {
+    try {
+      const res = await fetch(sample.path);
+      const blob = await res.blob();
+      addFiles([new File([blob], sample.name, { type: blob.type || "application/octet-stream" })]);
+    } catch {
+      /* sample unavailable */
+    }
+  }
+
+  async function loadFromUrl() {
+    if (!urlInput.trim()) return;
+    try {
+      const res = await fetch(urlInput.trim());
+      const blob = await res.blob();
+      const name = urlInput.split("/").pop() || "download";
+      addFiles([new File([blob], name, { type: blob.type || "application/octet-stream" })]);
+      setUrlInput("");
+    } catch {
+      /* fetch failed */
+    }
   }
 
   function triggerDownload(blob: Blob, filename: string) {
@@ -168,6 +213,30 @@ export default function HomePage() {
         />
       </div>
 
+      <div className="sample-row">
+        <FlaskConical size={14} />
+        <span>Samples:</span>
+        {SAMPLES.map((s) => (
+          <button key={s.name} type="button" className="preset-btn" onClick={() => loadSample(s)}>
+            {s.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="url-row">
+        <LinkIcon size={14} />
+        <input
+          type="url"
+          placeholder="Paste file URL (server processing)"
+          value={urlInput}
+          onChange={(e) => setUrlInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && loadFromUrl()}
+        />
+        <button type="button" className="btn-secondary" onClick={loadFromUrl}>
+          Load
+        </button>
+      </div>
+
       <div className="preset-row" role="group" aria-label="Privacy preset">
         {PRESETS.map((p) => (
           <button
@@ -180,6 +249,16 @@ export default function HomePage() {
           </button>
         ))}
       </div>
+
+      {preset === "custom" && (
+        <textarea
+          className="custom-fields"
+          placeholder="Fields to strip, one per line: EXIF:Artist&#10;GPS:latitude"
+          value={customFields}
+          onChange={(e) => setCustomFields(e.target.value)}
+          rows={3}
+        />
+      )}
 
       {jobs.map((job) => (
         <div key={job.id} className="file-row">

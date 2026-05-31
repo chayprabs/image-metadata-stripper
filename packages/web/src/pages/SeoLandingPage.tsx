@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import HomePage from "./HomePage";
 
 const SEO_CONTENT: Record<
   string,
@@ -36,12 +36,12 @@ export default function SeoLandingPage({ slug }: { slug: string }) {
   if (!content) return null;
 
   return (
-    <div className="tool-card">
-      <h1 style={{ fontSize: "1.35rem", marginTop: 0 }}>{content.headline}</h1>
-      <p style={{ color: "var(--muted)" }}>{content.body}</p>
-      <Link to="/" className="btn-primary" style={{ display: "inline-flex", marginTop: "1rem" }}>
-        Open ExifScrub tool
-      </Link>
+    <div>
+      <div className="tool-card" style={{ marginBottom: "1rem" }}>
+        <h1 style={{ fontSize: "1.35rem", marginTop: 0 }}>{content.headline}</h1>
+        <p style={{ color: "var(--muted)" }}>{content.body}</p>
+      </div>
+      <HomePage />
     </div>
   );
 }

@@ -38,7 +38,14 @@ export async function scrub(file: File, opts: ScrubOptions): Promise<ScrubResult
   if (mime === "image/jpeg" || file.name.match(/\.jpe?g$/i)) {
     cleanedBlob = await scrubJpeg(file, opts);
   } else if (mime === "image/png" || file.name.match(/\.png$/i)) {
-    cleanedBlob = await scrubPng(file);
+    cleanedBlob = await scrubPng(file, opts);
+  } else if (
+    mime === "image/webp" ||
+    mime === "image/gif" ||
+    mime === "image/bmp" ||
+    file.name.match(/\.(webp|gif|bmp|tiff?|heic|heif|avif)$/i)
+  ) {
+    cleanedBlob = await scrubViaCanvas(file, opts, mime);
   } else {
     cleanedBlob = new Blob([await file.arrayBuffer()], { type: mime });
   }
@@ -143,6 +150,7 @@ function stripGpsAuthorFromExif(exifObj: piexif.IExif): void {
   }
 }
 
+<<<<<<< HEAD
 function applyCustomExifRemoval(exifObj: piexif.IExif, custom: CustomField[]): void {
   for (const { field } of custom) {
     deleteExifField(exifObj, field);
@@ -160,12 +168,107 @@ function deleteExifField(exifObj: piexif.IExif, field: string): void {
     if (typeof tag !== "number") continue;
     const section = exifObj[key] as Record<number, unknown> | undefined;
     if (section?.[tag] !== undefined) delete section[tag];
+=======
+function applyCustomExifRemoval(
+  exifObj: piexif.IExif,
+  custom: CustomField[],
+  _before: MetadataReport
+): void {
+  const fieldToTag: Record<string, number> = {
+    Orientation: piexif.ImageIFD.Orientation,
+    Artist: piexif.ImageIFD.Artist,
+    Copyright: piexif.ImageIFD.Copyright,
+    ImageDescription: piexif.ImageIFD.ImageDescription,
+    Software: piexif.ImageIFD.Software,
+    Make: piexif.ImageIFD.Make,
+    Model: piexif.ImageIFD.Model,
+    UserComment: piexif.ExifIFD.UserComment,
+    BodySerialNumber: piexif.ExifIFD.BodySerialNumber,
+    LensSerialNumber: piexif.ExifIFD.LensSerialNumber,
+  };
+
+  for (const { namespace, field } of custom) {
+    if (namespace === "GPS") {
+      exifObj.GPS = {};
+      continue;
+    }
+    const tag = fieldToTag[field];
+    if (tag !== undefined) {
+      if (exifObj["0th"]?.[tag] !== undefined) delete exifObj["0th"][tag];
+      if (exifObj.Exif?.[tag] !== undefined) delete exifObj.Exif[tag];
+    }
+>>>>>>> 8f265d0 (feat: complete PRD gaps - PDF prove-clean, batch, custom preset, samples, e2e)
   }
 }
 
-async function scrubPng(file: File): Promise<Blob> {
+async function scrubViaCanvas(file: File, opts: ScrubOptions, mime: string): Promise<Blob> {
+  if (opts.preset === "orientation_only" && (mime === "image/jpeg" || file.name.match(/\.jpe?g$/i))) {
+    return scrubJpeg(file, opts, await read(file));
+  }
+
+  if (typeof document === "undefined") {
+    return new Blob([await file.arrayBuffer()], { type: mime });
+  }
+
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Canvas not available"));
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      const outputType = mime.startsWith("image/") ? mime : "image/png";
+      canvas.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error("Canvas export failed"))),
+        outputType,
+        0.92,
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Image decode failed"));
+    };
+    img.src = url;
+  });
+}
+
+async function scrubPng(file: File, opts: ScrubOptions): Promise<Blob> {
   const buffer = new Uint8Array(await file.arrayBuffer());
   const chunks = extractChunks(buffer);
+
+  if (opts.preset === "all") {
+    const kept = chunks.filter((c) => !METADATA_PNG_TYPES.has(c.name));
+    const encoded = encodeChunks(kept);
+    return new Blob([new Uint8Array(encoded)], { type: "image/png" });
+  }
+
+  if (opts.preset === "gps_author") {
+    const kept = chunks.filter((c) => {
+      if (!METADATA_PNG_TYPES.has(c.name)) return true;
+      const text = new TextDecoder().decode(c.data).toLowerCase();
+      return !(
+        text.includes("gps") ||
+        text.includes("author") ||
+        text.includes("creator") ||
+        text.includes("copyright") ||
+        text.includes("owner")
+      );
+    });
+    const encoded = encodeChunks(kept);
+    return new Blob([new Uint8Array(encoded)], { type: "image/png" });
+  }
+
+  if (opts.preset === "orientation_only") {
+    return scrubPng(file, { preset: "all" });
+  }
+
   const kept = chunks.filter((c) => !METADATA_PNG_TYPES.has(c.name));
   const encoded = encodeChunks(kept);
   return new Blob([new Uint8Array(encoded)], { type: "image/png" });
@@ -213,7 +316,16 @@ function shouldStripField(field: string, opts: ScrubOptions): boolean {
   if (opts.preset === "orientation_only") {
     return !field.toLowerCase().includes("orientation");
   }
-  return true;
+  if (opts.preset === "custom") {
+    return (
+      opts.custom?.some(
+        (c) =>
+          c.field === field ||
+          (c.namespace === "GPS" && (field.toLowerCase().includes("gps") || GPS_KEYS.has(field)))
+      ) ?? false
+    );
+  }
+  return false;
 }
 
 function arrayBufferToBinaryString(buffer: ArrayBuffer): string {

@@ -92,4 +92,40 @@ export function proveCleanToPdfText(payload: ProveCleanPayload): string {
   return lines.join("\n");
 }
 
+export async function proveCleanToPdf(payload: ProveCleanPayload): Promise<Blob> {
+  const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const page = pdfDoc.addPage([612, 792]);
+  let y = 750;
+
+  const draw = (text: string, size = 11, bold = false) => {
+    page.drawText(text, { x: 50, y, size, font: bold ? boldFont : font, color: rgb(0.1, 0.1, 0.1) });
+    y -= size + 6;
+  };
+
+  draw("ExifScrub Prove-Clean Report", 16, true);
+  y -= 8;
+  draw(`File: ${payload.filename}`);
+  draw(`SHA-256: ${payload.cleanedSha256}`, 9);
+  draw(`Timestamp: ${payload.timestamp}`);
+  draw(`Algorithm: ${payload.signatureAlgorithm}`);
+  y -= 8;
+  draw(`Stripped (${payload.stripped.length}):`, 12, true);
+  for (const s of payload.stripped.slice(0, 25)) {
+    if (y < 60) break;
+    draw(`  [${s.namespace}] ${s.field}`, 9);
+  }
+  y -= 8;
+  draw(`Retained (${payload.retained.length}):`, 12, true);
+  for (const r of payload.retained.slice(0, 15)) {
+    if (y < 60) break;
+    draw(`  [${r.namespace}] ${r.field}`, 9);
+  }
+
+  const pdfBytes = await pdfDoc.save();
+  return new Blob([new Uint8Array(pdfBytes)], { type: "application/pdf" });
+}
+
 export { SIGNING_KEY_ID };
