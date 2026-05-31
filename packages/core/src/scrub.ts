@@ -11,10 +11,12 @@ import type {
 import { read, AUTHOR_KEYS, GPS_KEYS } from "./read.js";
 import { sha256HexFromBlob } from "./hash.js";
 import { buildProveCleanPayload, signProveClean } from "./prove-clean.js";
+import { ScrubEnvironmentError, ScrubValidationError, UnsupportedFormatError } from "./errors.js";
 
 const PNG_TEXT_CHUNKS = new Set(["tEXt", "iTXt", "zTXt"]);
 const PNG_EXIF_CHUNK = "eXIf";
 const PNG_STRIP_ALL = new Set(["tEXt", "iTXt", "zTXt", "eXIf", "tIME", "pHYs", "gAMA", "cHRM"]);
+const CANVAS_DECODE_TIMEOUT_MS = 30_000;
 
 export interface ScrubOptions {
   preset: ScrubPreset;
@@ -22,9 +24,14 @@ export interface ScrubOptions {
 }
 
 export async function scrub(file: File, opts: ScrubOptions): Promise<ScrubResult> {
+  if (opts.preset === "custom" && !opts.custom?.length) {
+    throw new ScrubValidationError("Custom preset requires at least one field to strip");
+  }
+
   const before = await read(file);
   const mime = before.file.mime;
   let cleanedBlob: Blob;
+  let outputMime = mime;
 
   if (mime === "image/jpeg" || file.name.match(/\.jpe?g$/i)) {
     cleanedBlob = await scrubJpeg(file, opts);
@@ -39,11 +46,18 @@ export async function scrub(file: File, opts: ScrubOptions): Promise<ScrubResult
     cleanedBlob = await scrubViaCanvas(file, opts, mime);
   } else if (mime === "image/heic" || mime === "image/heif" || file.name.match(/\.heic$|\.heif$/i)) {
     cleanedBlob = await scrubHeic(file, opts);
+    if (cleanedBlob.type === "image/jpeg") {
+      outputMime = "image/jpeg";
+    }
   } else {
-    cleanedBlob = new Blob([await file.arrayBuffer()], { type: mime });
+    throw new UnsupportedFormatError(file.name, mime);
   }
 
-  const after = await read(new File([cleanedBlob], file.name, { type: mime }));
+  if (cleanedBlob.type && cleanedBlob.type !== "application/octet-stream") {
+    outputMime = cleanedBlob.type;
+  }
+
+  const after = await read(new File([cleanedBlob], file.name, { type: outputMime }));
   const stripped = diffStripped(before, after, opts);
   const retained = diffRetained(after, opts);
 
@@ -59,7 +73,7 @@ export async function scrub(file: File, opts: ScrubOptions): Promise<ScrubResult
     cleanedBlob,
     cleaned: {
       sha256: proveCleanJson.cleanedSha256,
-      mime,
+      mime: outputMime,
       size: cleanedBlob.size,
     },
     stripped,
@@ -120,10 +134,6 @@ async function scrubJpeg(file: File, opts: ScrubOptions): Promise<Blob> {
     return dataUrlToBlob(inserted, "image/jpeg");
   }
 
-  if (opts.preset === "custom") {
-    return dataUrlToBlob(dataUrl, "image/jpeg");
-  }
-
   return dataUrlToBlob(piexif.remove(dataUrl), "image/jpeg");
 }
 
@@ -174,7 +184,7 @@ function deleteExifField(exifObj: piexif.IExif, field: string): void {
 
 async function scrubHeic(file: File, opts: ScrubOptions): Promise<Blob> {
   if (typeof document === "undefined") {
-    return new Blob([await file.arrayBuffer()], { type: file.type || "image/heic" });
+    throw new ScrubEnvironmentError("HEIC");
   }
   try {
     const heic2any = (await import("heic2any")).default;
@@ -183,22 +193,27 @@ async function scrubHeic(file: File, opts: ScrubOptions): Promise<Blob> {
     const jpegFile = new File([jpegBlob], file.name.replace(/\.heic$/i, ".jpg"), {
       type: "image/jpeg",
     });
-    const scrubbed = await scrubJpeg(jpegFile, opts);
-    return scrubbed;
+    return scrubJpeg(jpegFile, opts);
   } catch {
-    return new Blob([await file.arrayBuffer()], { type: file.type || "image/heic" });
+    throw new ScrubEnvironmentError("HEIC");
   }
 }
 
 async function scrubViaCanvas(file: File, opts: ScrubOptions, mime: string): Promise<Blob> {
   if (typeof document === "undefined") {
-    return new Blob([await file.arrayBuffer()], { type: mime });
+    throw new ScrubEnvironmentError(mime.split("/")[1]?.toUpperCase() ?? "Image");
   }
 
   return new Promise((resolve, reject) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
+    const timer = window.setTimeout(() => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Image decode timed out"));
+    }, CANVAS_DECODE_TIMEOUT_MS);
+
     img.onload = () => {
+      window.clearTimeout(timer);
       URL.revokeObjectURL(url);
       const canvas = document.createElement("canvas");
       canvas.width = img.naturalWidth;
@@ -217,6 +232,7 @@ async function scrubViaCanvas(file: File, opts: ScrubOptions, mime: string): Pro
       );
     };
     img.onerror = () => {
+      window.clearTimeout(timer);
       URL.revokeObjectURL(url);
       reject(new Error("Image decode failed"));
     };
@@ -227,6 +243,10 @@ async function scrubViaCanvas(file: File, opts: ScrubOptions, mime: string): Pro
 async function scrubPng(file: File, opts: ScrubOptions): Promise<Blob> {
   const buffer = new Uint8Array(await file.arrayBuffer());
   const chunks = extractChunks(buffer);
+
+  if (opts.preset === "custom" && !opts.custom?.length) {
+    return new Blob([buffer], { type: "image/png" });
+  }
 
   if (opts.preset === "all") {
     const kept = chunks.filter((c) => !PNG_STRIP_ALL.has(c.name));
@@ -250,7 +270,9 @@ async function scrubPng(file: File, opts: ScrubOptions): Promise<Blob> {
   }
 
   if (opts.preset === "orientation_only") {
-    const kept = chunks.filter((c) => !PNG_TEXT_CHUNKS.has(c.name) && c.name !== "tIME");
+    const kept = chunks.filter(
+      (c) => !PNG_TEXT_CHUNKS.has(c.name) && c.name !== "tIME" && c.name !== PNG_EXIF_CHUNK,
+    );
     return new Blob([new Uint8Array(encodeChunks(kept))], { type: "image/png" });
   }
 
@@ -271,7 +293,7 @@ async function scrubPng(file: File, opts: ScrubOptions): Promise<Blob> {
 function diffStripped(
   before: MetadataReport,
   after: MetadataReport,
-  opts: ScrubOptions
+  opts: ScrubOptions,
 ): ScrubFieldEntry[] {
   const stripped: ScrubFieldEntry[] = [];
   for (const block of before.blocks) {
@@ -315,7 +337,7 @@ function shouldStripField(field: string, opts: ScrubOptions): boolean {
       opts.custom?.some(
         (c) =>
           c.field === field ||
-          (c.namespace === "GPS" && (field.toLowerCase().includes("gps") || GPS_KEYS.has(field)))
+          (c.namespace === "GPS" && (field.toLowerCase().includes("gps") || GPS_KEYS.has(field))),
       ) ?? false
     );
   }

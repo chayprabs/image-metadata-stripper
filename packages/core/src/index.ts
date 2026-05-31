@@ -1,4 +1,5 @@
 export * from "./types.js";
+export * from "./errors.js";
 export { read } from "./read.js";
 export { scrub, type ScrubOptions } from "./scrub.js";
 export { diff } from "./diff.js";
