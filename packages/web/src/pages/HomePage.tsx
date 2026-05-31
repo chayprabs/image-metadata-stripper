@@ -50,6 +50,7 @@ const SAMPLES = [
   { name: "geotagged.jpg", label: "Geotagged JPEG", path: "/samples/geotagged.jpg" },
   { name: "pdf-with-author.pdf", label: "PDF with Author", path: "/samples/pdf-with-author.pdf" },
   { name: "mp3-with-id3.mp3", label: "MP3 with ID3", path: "/samples/mp3-with-id3.mp3" },
+  { name: "video-with-meta.mp4", label: "MP4 with metadata", path: "/samples/video-with-meta.mp4" },
 ];
 
 function parseCustomFields(text: string): CustomField[] {

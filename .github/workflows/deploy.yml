@@ -27,13 +27,20 @@ jobs:
       - run: pnpm install
       - run: pnpm --filter @exifscrub/core run build
       - run: pnpm --filter @exifscrub/web run build
+        env:
+          VITE_BASE: /image-metadata-stripper/
       - uses: actions/upload-pages-artifact@v3
         with:
+          path: packages/web/dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
           path: packages/web/dist
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    continue-on-error: true
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

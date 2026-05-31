@@ -311,12 +311,28 @@ async def v1_batch(
                 cleaned_sha = hashlib.sha256(cleaned_bytes).hexdigest()
                 rel = fpath.relative_to(extract_dir)
                 out_zip.writestr(f"clean_{rel}", cleaned_bytes)
+
+                prove = {
+                    "version": "1",
+                    "filename": str(rel),
+                    "cleanedSha256": cleaned_sha,
+                    "stripped": stripped,
+                    "retained": retained,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "signatureAlgorithm": "HMAC-SHA256",
+                    "signature": "",
+                }
+                prove["signature"] = sign_payload(prove)
+                prove_path = Path("prove-clean") / f"{rel}.prove-clean.json"
+                out_zip.writestr(str(prove_path), json.dumps(prove, indent=2))
+
                 manifest.append({
                     "filename": str(rel),
                     "sha256": cleaned_sha,
                     "preset": preset,
                     "stripped_count": len(stripped),
                     "retained_count": len(retained),
+                    "proveCleanPath": str(prove_path),
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
 

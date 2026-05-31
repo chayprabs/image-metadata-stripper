@@ -7,12 +7,15 @@
 - Server worker for PDF, MP3, MP4, MOV, WAV via ExifTool
 - Privacy presets: Strip all, GPS+author, orientation only, custom
 - Prove-clean PDF + JSON attestations with cryptographic signatures
-- Batch ZIP processing via worker
-- Sample files, URL loading (server fetch for external URLs)
+- Batch ZIP processing via worker (includes per-file prove-clean JSON)
+- Sample files (JPEG, PDF, MP3, MP4), URL loading (server fetch for external URLs)
 - SEO landing pages, privacy policy, terms & conditions
-- CLI (`exifscrub`), Docker compose, GitHub Actions CI
+- CLI (`exifscrub`) with smoke test, Docker compose, GitHub Actions CI + e2e
+- GitHub Pages build (`VITE_BASE`, SPA 404.html, sitemap, robots.txt)
 
 ### Fixed
 - Prove-clean attestation accuracy for partial presets
 - Worker custom preset support
 - PNG orientation-only preset behavior
+- `.env.example` tracked in git (gitignore exception)
+- Deploy workflow no longer fails main when Pages is not yet enabled

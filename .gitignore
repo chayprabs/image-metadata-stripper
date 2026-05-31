@@ -20,6 +20,7 @@ QUALIFYING_CRITERIA.md
 # Env
 .env
 .env.*
+!.env.example
 
 # Python
 *.egg-info/

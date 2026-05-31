@@ -10,14 +10,15 @@
     "build": "tsup src/cli.ts --format esm --clean",
     "typecheck": "tsc --noEmit",
     "lint": "echo ok",
-    "test": "echo ok"
+    "test": "pnpm run build && vitest run"
   },
   "dependencies": {
     "@exifscrub/core": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.3.5",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   },
   "license": "MIT"
 }

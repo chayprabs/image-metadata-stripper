@@ -32,6 +32,10 @@ The web app proxies `/api` to the worker on port 8080.
 
 Copy `.env.example` to `.env` and set `VITE_WORKER_URL` for production deployments.
 
+### GitHub Pages
+
+Enable **Settings → Pages → GitHub Actions** as the source. Pushes to `main` build with `VITE_BASE=/image-metadata-stripper/` and deploy when Pages is configured. The deploy job uses `continue-on-error` until Pages is enabled so CI stays green.
+
 ## Worker API
 
 | Endpoint | Description |
