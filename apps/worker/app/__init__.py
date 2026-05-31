@@ -1,0 +1,1 @@
+# ExifScrub worker package

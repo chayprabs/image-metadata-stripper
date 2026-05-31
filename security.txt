@@ -1,0 +1,3 @@
+Contact: https://github.com/chayprabs/image-metadata-stripper/security/advisories/new
+Preferred-Languages: en
+Canonical: https://github.com/chayprabs/image-metadata-stripper/blob/main/security.txt

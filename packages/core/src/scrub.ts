@@ -85,11 +85,11 @@ async function scrubJpeg(
     dataUrl = "data:image/jpeg;base64," + btoa(bin);
   }
 
-  let exifObj: piexif.IExif = {};
+  let exifObj: piexif.IExif = { "0th": {}, Exif: {}, GPS: {}, "1st": {}, thumbnail: null };
   try {
     exifObj = piexif.load(dataUrl);
   } catch {
-    exifObj = { "0th": {}, Exif: {}, GPS: {}, "1st": {}, thumbnail: null };
+    /* keep empty exif */
   }
 
   if (opts.preset === "all") {
@@ -166,7 +166,7 @@ async function scrubPng(file: File): Promise<Blob> {
   const chunks = extractChunks(buffer);
   const kept = chunks.filter((c) => !METADATA_PNG_TYPES.has(c.name));
   const encoded = encodeChunks(kept);
-  return new Blob([encoded], { type: "image/png" });
+  return new Blob([new Uint8Array(encoded)], { type: "image/png" });
 }
 
 function diffStripped(

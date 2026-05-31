@@ -2,16 +2,23 @@ import type { ProveCleanPayload, ScrubFieldEntry } from "./types.js";
 
 const SIGNING_KEY_ID = "exifscrub-browser-v1";
 
-let cachedKey: CryptoKey | null = null;
+let cachedPrivateKey: CryptoKey | null = null;
+let cachedPublicKey: CryptoKey | null = null;
 
 async function getSigningKey(): Promise<CryptoKey> {
-  if (cachedKey) return cachedKey;
-  cachedKey = await crypto.subtle.generateKey(
-    { name: "Ed25519" },
-    false,
-    ["sign", "verify"]
-  );
-  return cachedKey;
+  if (cachedPrivateKey) return cachedPrivateKey;
+  const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, false, [
+    "sign",
+    "verify",
+  ]);
+  cachedPrivateKey = pair.privateKey;
+  cachedPublicKey = pair.publicKey;
+  return cachedPrivateKey;
+}
+
+async function getVerifyKey(): Promise<CryptoKey> {
+  await getSigningKey();
+  return cachedPublicKey!;
 }
 
 export async function buildProveCleanPayload(input: {
@@ -55,7 +62,7 @@ export async function signProveClean(payload: ProveCleanPayload): Promise<string
 export async function verifyProveClean(payload: ProveCleanPayload): Promise<boolean> {
   if (!payload.signature) return false;
   try {
-    const key = await getSigningKey();
+    const key = await getVerifyKey();
     const { signature, ...rest } = payload;
     const data = new TextEncoder().encode(canonicalPayload(rest));
     const sigBytes = Uint8Array.from(atob(signature), (c) => c.charCodeAt(0));

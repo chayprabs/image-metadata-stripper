@@ -77,7 +77,9 @@ export async function read(file: File): Promise<MetadataReport> {
   try {
     const thumb = await exifr.thumbnail(buffer);
     if (thumb) {
-      const blob = new Blob([thumb], { type: "image/jpeg" });
+      const thumbBytes = thumb instanceof Uint8Array ? thumb : new Uint8Array(thumb as ArrayBuffer);
+      const copy = new Uint8Array(thumbBytes);
+      const blob = new Blob([copy], { type: "image/jpeg" });
       const dataUrl = await blobToDataUrl(blob);
       thumbnails.push({ source: "embedded", dataUrl });
     }

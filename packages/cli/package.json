@@ -1,0 +1,23 @@
+{
+  "name": "@exifscrub/cli",
+  "version": "1.0.0",
+  "description": "CLI for ExifScrub metadata scrubbing",
+  "type": "module",
+  "bin": {
+    "exifscrub": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsup src/cli.ts --format esm --clean",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo ok",
+    "test": "echo ok"
+  },
+  "dependencies": {
+    "@exifscrub/core": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2"
+  },
+  "license": "MIT"
+}
