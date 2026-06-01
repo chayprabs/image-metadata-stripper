@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   read,
   scrub,
@@ -25,12 +25,15 @@ import {
 import { workerScrub, workerRead, workerFetchUrl, workerBatch } from "../api/worker";
 import WorkerBanner from "../components/WorkerBanner";
 import DiffView from "../components/DiffView";
+import { assetUrl, isAppRelativeUrl, resolveFetchUrl } from "../utils/assetUrl";
 
 interface FileJob {
   id: string;
   file: File;
   mode: "browser" | "worker";
   report?: MetadataReport;
+  reportBefore?: MetadataReport;
+  reportAfter?: MetadataReport;
   scrubResult?: ScrubResult;
   diffResult?: Diff;
   error?: string;
@@ -47,21 +50,25 @@ const PRESETS: { id: ScrubPreset; label: string }[] = [
 ];
 
 const SAMPLES = [
-  { name: "geotagged.jpg", label: "Geotagged JPEG", path: "/samples/geotagged.jpg" },
-  { name: "pdf-with-author.pdf", label: "PDF with Author", path: "/samples/pdf-with-author.pdf" },
-  { name: "mp3-with-id3.mp3", label: "MP3 with ID3", path: "/samples/mp3-with-id3.mp3" },
-  { name: "video-with-meta.mp4", label: "MP4 with metadata", path: "/samples/video-with-meta.mp4" },
+  { name: "geotagged.jpg", label: "Geotagged JPEG", path: "samples/geotagged.jpg" },
+  { name: "pdf-with-author.pdf", label: "PDF with Author", path: "samples/pdf-with-author.pdf" },
+  { name: "mp3-with-id3.mp3", label: "MP3 with ID3", path: "samples/mp3-with-id3.mp3" },
+  { name: "video-with-meta.mp4", label: "MP4 with metadata", path: "samples/video-with-meta.mp4" },
 ];
 
-function parseCustomFields(text: string): CustomField[] {
+export function parseCustomFields(text: string): CustomField[] {
   return text
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean)
     .map((l) => {
-      const [namespace, field] = l.split(":");
-      return { namespace: namespace ?? "EXIF", field: field ?? l };
-    });
+      const idx = l.indexOf(":");
+      if (idx === -1) return { namespace: "EXIF", field: l };
+      const namespace = l.slice(0, idx);
+      const field = l.slice(idx + 1);
+      return { namespace: namespace || "EXIF", field };
+    })
+    .filter((c) => c.field.trim().length > 0);
 }
 
 export default function HomePage() {
@@ -72,12 +79,23 @@ export default function HomePage() {
   const [urlInput, setUrlInput] = useState("");
   const [urlError, setUrlError] = useState<string | null>(null);
   const [sampleError, setSampleError] = useState<string | null>(null);
+  const [batchError, setBatchError] = useState<string | null>(null);
   const [batchLoading, setBatchLoading] = useState(false);
 
-  const scrubOpts = {
-    preset,
-    custom: preset === "custom" ? parseCustomFields(customFields) : undefined,
-  };
+  const customList = preset === "custom" ? parseCustomFields(customFields) : undefined;
+  const scrubOpts = { preset, custom: customList };
+
+  useEffect(() => {
+    setJobs((prev) =>
+      prev.map((j) => ({
+        ...j,
+        scrubResult: undefined,
+        diffResult: undefined,
+        showDiff: undefined,
+        reportAfter: undefined,
+      })),
+    );
+  }, [preset, customFields]);
 
   const addFiles = useCallback((files: FileList | File[]) => {
     const list = Array.from(files);
@@ -109,6 +127,13 @@ export default function HomePage() {
   }
 
   async function handleScrub(job: FileJob) {
+    if (preset === "custom" && !customList?.length) {
+      updateJob(job.id, {
+        error: "Add at least one field in the custom list (one per line, e.g. EXIF:Artist)",
+      });
+      return;
+    }
+
     updateJob(job.id, { loading: true, error: undefined });
     try {
       const before =
@@ -121,15 +146,18 @@ export default function HomePage() {
           : await workerScrub(job.file, preset, scrubOpts.custom);
 
       const cleanedFile = new File([result.cleanedBlob], job.file.name, {
-        type: job.file.type || before.file.mime,
+        type: result.cleaned.mime || job.file.type || before.file.mime,
       });
       const after =
         job.mode === "browser" ? await read(cleanedFile) : await workerRead(cleanedFile);
 
       updateJob(job.id, {
         scrubResult: result,
-        report: before,
+        reportBefore: before,
+        reportAfter: after,
+        report: after,
         diffResult: diff(before, after),
+        showDiff: true,
         loading: false,
       });
     } catch (e) {
@@ -147,12 +175,17 @@ export default function HomePage() {
   }
 
   async function handleBatchZip(zipFile: File) {
+    if (preset === "custom" && !customList?.length) {
+      setBatchError("Add at least one custom field before running batch ZIP");
+      return;
+    }
     setBatchLoading(true);
+    setBatchError(null);
     try {
-      const blob = await workerBatch(zipFile, preset);
+      const blob = await workerBatch(zipFile, preset, customList);
       triggerDownload(blob, "exif-scrub-batch.zip");
     } catch (e) {
-      setSampleError(e instanceof Error ? e.message : "Batch failed");
+      setBatchError(e instanceof Error ? e.message : "Batch failed");
     } finally {
       setBatchLoading(false);
     }
@@ -175,14 +208,20 @@ export default function HomePage() {
 
   async function downloadProveCleanReport(job: FileJob) {
     if (!job.scrubResult) return;
-    const pdf = await proveCleanToPdf(job.scrubResult.proveCleanJson);
-    triggerDownload(pdf, `prove-clean-${job.file.name}.pdf`);
+    try {
+      const pdf = await proveCleanToPdf(job.scrubResult.proveCleanJson);
+      triggerDownload(pdf, `prove-clean-${job.file.name}.pdf`);
+    } catch (e) {
+      updateJob(job.id, {
+        error: e instanceof Error ? e.message : "Prove-clean PDF generation failed",
+      });
+    }
   }
 
   async function loadSample(sample: (typeof SAMPLES)[0]) {
     setSampleError(null);
     try {
-      const res = await fetch(sample.path);
+      const res = await fetch(assetUrl(sample.path));
       if (!res.ok) throw new Error(`Sample not found (${res.status})`);
       const blob = await res.blob();
       addFiles([new File([blob], sample.name, { type: blob.type || "application/octet-stream" })]);
@@ -196,12 +235,11 @@ export default function HomePage() {
     setUrlError(null);
     const url = urlInput.trim();
     try {
-      const isSameOrigin = url.startsWith(window.location.origin) || url.startsWith("/");
-      if (isSameOrigin) {
-        const res = await fetch(url);
+      if (isAppRelativeUrl(url)) {
+        const res = await fetch(resolveFetchUrl(url));
         if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
         const blob = await res.blob();
-        const name = url.split("/").pop() || "download";
+        const name = url.split("/").pop()?.split("?")[0] || "download";
         addFiles([new File([blob], name, { type: blob.type || "application/octet-stream" })]);
       } else {
         const file = await workerFetchUrl(url);
@@ -280,9 +318,9 @@ export default function HomePage() {
           onChange={(e) => setUrlInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && loadFromUrl()}
         />
-        <button type="button" className="btn-secondary" aria-label="Load file from URL" onClick={loadFromUrl}>
-          Load URL
-        </button>
+          <button type="button" className="btn-secondary" aria-label="Load URL" onClick={loadFromUrl}>
+            Load URL
+          </button>
       </div>
       {urlError && <p className="error-msg">{urlError}</p>}
 
@@ -309,26 +347,38 @@ export default function HomePage() {
         />
       )}
 
-      {jobs.length > 0 && (
-        <div className="actions-row" style={{ marginBottom: "0.75rem" }}>
-          <button type="button" className="btn-primary" onClick={handleScrubAll}>
-            <Shield size={14} /> Scrub all ({jobs.length})
-          </button>
-          <button type="button" className="btn-secondary" onClick={() => setJobs([])}>
-            <Trash2 size={14} /> Clear all
-          </button>
-          <label className="btn-secondary" style={{ cursor: "pointer" }}>
-            <Archive size={14} /> Batch ZIP
-            <input
-              type="file"
-              accept=".zip"
-              hidden
-              onChange={(e) => e.target.files?.[0] && handleBatchZip(e.target.files[0])}
-            />
-          </label>
-          {batchLoading && <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>Batch processing…</span>}
-        </div>
-      )}
+      <div className="actions-row" style={{ marginBottom: jobs.length > 0 ? "0.75rem" : 0 }}>
+        {jobs.length > 0 && (
+          <>
+            <button type="button" className="btn-primary" onClick={handleScrubAll}>
+              <Shield size={14} /> Scrub all ({jobs.length})
+            </button>
+            <button type="button" className="btn-secondary" onClick={() => {
+            setJobs([]);
+            setSampleError(null);
+            setUrlError(null);
+            setBatchError(null);
+          }}>
+              <Trash2 size={14} /> Clear all
+            </button>
+          </>
+        )}
+        <label className="btn-secondary" style={{ cursor: "pointer" }}>
+          <Archive size={14} /> Batch ZIP
+          <input
+            type="file"
+            accept=".zip"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handleBatchZip(f);
+              e.target.value = "";
+            }}
+          />
+        </label>
+        {batchLoading && <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>Batch processing…</span>}
+      </div>
+      {batchError && <p className="error-msg">{batchError}</p>}
 
       {jobs.map((job) => (
         <div key={job.id} className="file-row">
@@ -349,7 +399,7 @@ export default function HomePage() {
                 </span>
                 {job.report && (
                   <p style={{ margin: "0.2rem 0 0", fontSize: "0.75rem", color: "var(--muted)", fontFamily: "monospace" }}>
-                    sha256: {job.report.file.sha256.slice(0, 16)}…
+                    sha256: {(job.reportAfter ?? job.report).file.sha256.slice(0, 16)}…
                   </p>
                 )}
               </div>
@@ -385,8 +435,8 @@ export default function HomePage() {
             </button>
           </div>
 
-          {job.showMetadata && job.report && (
-            <pre className="metadata-panel">{JSON.stringify(job.report.blocks, null, 2)}</pre>
+          {job.showMetadata && (job.reportAfter ?? job.report) && (
+            <pre className="metadata-panel">{JSON.stringify((job.reportAfter ?? job.report)!.blocks, null, 2)}</pre>
           )}
 
           {job.scrubResult && (
@@ -404,8 +454,14 @@ export default function HomePage() {
           )}
 
           {job.diffResult && (
-            <details open={job.showDiff} style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
-              <summary onClick={() => updateJob(job.id, { showDiff: !job.showDiff })}>
+            <details
+              open={job.showDiff ?? true}
+              style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}
+              onToggle={(e) =>
+                updateJob(job.id, { showDiff: (e.currentTarget as HTMLDetailsElement).open })
+              }
+            >
+              <summary>
                 Metadata diff ({job.diffResult.entries.filter((e) => e.status === "removed").length} removed)
               </summary>
               <DiffView diff={job.diffResult} />

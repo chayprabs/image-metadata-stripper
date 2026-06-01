@@ -34,13 +34,21 @@ const SEO_CONTENT: Record<
 
 export default function SeoLandingPage({ slug }: { slug: string }) {
   const content = SEO_CONTENT[slug];
-  if (!content) return null;
 
   useEffect(() => {
+    if (!content) return;
+    const defaultTitle = "ExifScrub — Remove image & file metadata online";
     document.title = `${content.title} — ExifScrub`;
     const meta = document.querySelector('meta[name="description"]');
+    const prevDescription = meta?.getAttribute("content") ?? "";
     if (meta) meta.setAttribute("content", content.body);
-  }, [content.title, content.body]);
+    return () => {
+      document.title = defaultTitle;
+      if (meta) meta.setAttribute("content", prevDescription);
+    };
+  }, [content]);
+
+  if (!content) return null;
 
   return (
     <div>

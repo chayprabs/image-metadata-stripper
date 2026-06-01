@@ -78,10 +78,15 @@ export async function workerFetchUrl(url: string): Promise<File> {
   return new File([bytes], data.filename, { type: data.mime });
 }
 
-export async function workerBatch(file: File, preset: ScrubPreset): Promise<Blob> {
+export async function workerBatch(
+  file: File,
+  preset: ScrubPreset,
+  custom?: CustomField[],
+): Promise<Blob> {
   const form = new FormData();
   form.append("file", file);
   form.append("preset", preset);
+  if (custom?.length) form.append("custom", JSON.stringify(custom));
   const res = await workerFetch("/v1/batch", { method: "POST", body: form });
   if (!res.ok) {
     const err = await res.text();

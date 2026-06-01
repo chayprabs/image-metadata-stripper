@@ -1,11 +1,24 @@
 import { useEffect, useState } from "react";
 import { workerHealth } from "../api/worker";
 
+const HEALTH_POLL_MS = 15_000;
+
 export default function WorkerBanner() {
   const [available, setAvailable] = useState<boolean | null>(null);
 
   useEffect(() => {
-    workerHealth().then(setAvailable);
+    let active = true;
+    const check = () => {
+      workerHealth().then((ok) => {
+        if (active) setAvailable(ok);
+      });
+    };
+    check();
+    const timer = window.setInterval(check, HEALTH_POLL_MS);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
   }, []);
 
   if (available === null || available) return null;

@@ -1,6 +1,6 @@
 FROM python:3.14-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends exiftool \
+RUN apt-get update && apt-get install -y --no-install-recommends exiftool ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

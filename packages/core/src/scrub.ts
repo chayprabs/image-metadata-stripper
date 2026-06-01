@@ -11,10 +11,14 @@ import type {
 import { read, AUTHOR_KEYS, GPS_KEYS } from "./read.js";
 import { sha256HexFromBlob } from "./hash.js";
 import { buildProveCleanPayload, signProveClean } from "./prove-clean.js";
+import { ScrubEnvironmentError, ScrubValidationError, UnsupportedFormatError } from "./errors.js";
 
 const PNG_TEXT_CHUNKS = new Set(["tEXt", "iTXt", "zTXt"]);
 const PNG_EXIF_CHUNK = "eXIf";
-const PNG_STRIP_ALL = new Set(["tEXt", "iTXt", "zTXt", "eXIf", "tIME", "pHYs", "gAMA", "cHRM"]);
+const PNG_ICC_CHUNK = "iCCP";
+const PNG_STRIP_ALL = new Set(["tEXt", "iTXt", "zTXt", "eXIf", "iCCP", "tIME", "pHYs", "gAMA", "cHRM"]);
+const CANVAS_DECODE_TIMEOUT_MS = 30_000;
+const CANVAS_FORMAT_LABEL = "WebP/GIF/BMP/TIFF/AVIF";
 
 export interface ScrubOptions {
   preset: ScrubPreset;
@@ -22,9 +26,14 @@ export interface ScrubOptions {
 }
 
 export async function scrub(file: File, opts: ScrubOptions): Promise<ScrubResult> {
+  if (opts.preset === "custom" && !opts.custom?.length) {
+    throw new ScrubValidationError("Custom preset requires at least one field to strip");
+  }
+
   const before = await read(file);
   const mime = before.file.mime;
   let cleanedBlob: Blob;
+  let outputMime = mime;
 
   if (mime === "image/jpeg" || file.name.match(/\.jpe?g$/i)) {
     cleanedBlob = await scrubJpeg(file, opts);
@@ -39,11 +48,18 @@ export async function scrub(file: File, opts: ScrubOptions): Promise<ScrubResult
     cleanedBlob = await scrubViaCanvas(file, opts, mime);
   } else if (mime === "image/heic" || mime === "image/heif" || file.name.match(/\.heic$|\.heif$/i)) {
     cleanedBlob = await scrubHeic(file, opts);
+    if (cleanedBlob.type === "image/jpeg") {
+      outputMime = "image/jpeg";
+    }
   } else {
-    cleanedBlob = new Blob([await file.arrayBuffer()], { type: mime });
+    throw new UnsupportedFormatError(file.name, mime);
   }
 
-  const after = await read(new File([cleanedBlob], file.name, { type: mime }));
+  if (cleanedBlob.type && cleanedBlob.type !== "application/octet-stream") {
+    outputMime = cleanedBlob.type;
+  }
+
+  const after = await read(new File([cleanedBlob], file.name, { type: outputMime }));
   const stripped = diffStripped(before, after, opts);
   const retained = diffRetained(after, opts);
 
@@ -59,7 +75,7 @@ export async function scrub(file: File, opts: ScrubOptions): Promise<ScrubResult
     cleanedBlob,
     cleaned: {
       sha256: proveCleanJson.cleanedSha256,
-      mime,
+      mime: outputMime,
       size: cleanedBlob.size,
     },
     stripped,
@@ -69,6 +85,15 @@ export async function scrub(file: File, opts: ScrubOptions): Promise<ScrubResult
 }
 
 async function scrubJpeg(file: File, opts: ScrubOptions): Promise<Blob> {
+  try {
+    return await scrubJpegInner(file, opts);
+  } catch (e) {
+    if (e instanceof ScrubValidationError || e instanceof ScrubEnvironmentError) throw e;
+    throw new ScrubValidationError(e instanceof Error ? e.message : "Invalid JPEG data");
+  }
+}
+
+async function scrubJpegInner(file: File, opts: ScrubOptions): Promise<Blob> {
   const buffer = await file.arrayBuffer();
   const binary = arrayBufferToBinaryString(buffer);
   let dataUrl: string;
@@ -118,10 +143,6 @@ async function scrubJpeg(file: File, opts: ScrubOptions): Promise<Blob> {
     const dumped = piexif.dump(exifObj);
     const inserted = piexif.insert(dumped, piexif.remove(dataUrl));
     return dataUrlToBlob(inserted, "image/jpeg");
-  }
-
-  if (opts.preset === "custom") {
-    return dataUrlToBlob(dataUrl, "image/jpeg");
   }
 
   return dataUrlToBlob(piexif.remove(dataUrl), "image/jpeg");
@@ -174,7 +195,8 @@ function deleteExifField(exifObj: piexif.IExif, field: string): void {
 
 async function scrubHeic(file: File, opts: ScrubOptions): Promise<Blob> {
   if (typeof document === "undefined") {
-    return new Blob([await file.arrayBuffer()], { type: file.type || "image/heic" });
+    const label = file.name.match(/\.heif$/i) || file.type === "image/heif" ? "HEIF" : "HEIC";
+    throw new ScrubEnvironmentError(label);
   }
   try {
     const heic2any = (await import("heic2any")).default;
@@ -183,22 +205,33 @@ async function scrubHeic(file: File, opts: ScrubOptions): Promise<Blob> {
     const jpegFile = new File([jpegBlob], file.name.replace(/\.heic$/i, ".jpg"), {
       type: "image/jpeg",
     });
-    const scrubbed = await scrubJpeg(jpegFile, opts);
-    return scrubbed;
+    return scrubJpeg(jpegFile, opts);
   } catch {
-    return new Blob([await file.arrayBuffer()], { type: file.type || "image/heic" });
+    const label = file.name.match(/\.heif$/i) || file.type === "image/heif" ? "HEIF" : "HEIC";
+    throw new ScrubEnvironmentError(label);
   }
 }
 
 async function scrubViaCanvas(file: File, opts: ScrubOptions, mime: string): Promise<Blob> {
   if (typeof document === "undefined") {
-    return new Blob([await file.arrayBuffer()], { type: mime });
+    throw new ScrubEnvironmentError(mime.split("/")[1]?.toUpperCase() ?? "Image");
+  }
+  if (opts.preset !== "all") {
+    throw new ScrubValidationError(
+      `Partial presets are not supported for ${CANVAS_FORMAT_LABEL} in-browser — use Strip all or convert to JPEG/PNG first`,
+    );
   }
 
   return new Promise((resolve, reject) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
+    const timer = window.setTimeout(() => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Image decode timed out"));
+    }, CANVAS_DECODE_TIMEOUT_MS);
+
     img.onload = () => {
+      window.clearTimeout(timer);
       URL.revokeObjectURL(url);
       const canvas = document.createElement("canvas");
       canvas.width = img.naturalWidth;
@@ -217,6 +250,7 @@ async function scrubViaCanvas(file: File, opts: ScrubOptions, mime: string): Pro
       );
     };
     img.onerror = () => {
+      window.clearTimeout(timer);
       URL.revokeObjectURL(url);
       reject(new Error("Image decode failed"));
     };
@@ -235,7 +269,7 @@ async function scrubPng(file: File, opts: ScrubOptions): Promise<Blob> {
 
   if (opts.preset === "gps_author") {
     const kept = chunks.filter((c) => {
-      if (c.name === PNG_EXIF_CHUNK) return false;
+      if (c.name === PNG_EXIF_CHUNK || c.name === PNG_ICC_CHUNK) return false;
       if (!PNG_TEXT_CHUNKS.has(c.name)) return true;
       const text = new TextDecoder().decode(c.data).toLowerCase();
       return !(
@@ -243,23 +277,38 @@ async function scrubPng(file: File, opts: ScrubOptions): Promise<Blob> {
         text.includes("author") ||
         text.includes("creator") ||
         text.includes("copyright") ||
-        text.includes("owner")
+        text.includes("owner") ||
+        text.includes("xmp") ||
+        text.includes("xml")
       );
     });
     return new Blob([new Uint8Array(encodeChunks(kept))], { type: "image/png" });
   }
 
   if (opts.preset === "orientation_only") {
-    const kept = chunks.filter((c) => !PNG_TEXT_CHUNKS.has(c.name) && c.name !== "tIME");
+    const kept = chunks.filter(
+      (c) => !PNG_TEXT_CHUNKS.has(c.name) && c.name !== "tIME" && c.name !== PNG_EXIF_CHUNK,
+    );
     return new Blob([new Uint8Array(encodeChunks(kept))], { type: "image/png" });
   }
 
   if (opts.preset === "custom" && opts.custom?.length) {
-    const stripFields = new Set(opts.custom.map((c) => c.field.toLowerCase()));
+    const wantsGps = opts.custom.some((c) => c.namespace === "GPS");
+    const wantsExif = opts.custom.some((c) => c.namespace === "EXIF" || c.namespace === "XMP");
+    const stripFields = new Set(
+      opts.custom.map((c) => c.field.toLowerCase()).filter(Boolean),
+    );
     const kept = chunks.filter((c) => {
+      if (wantsExif && c.name === PNG_EXIF_CHUNK) return false;
+      if (wantsGps && PNG_TEXT_CHUNKS.has(c.name)) {
+        const text = new TextDecoder().decode(c.data).toLowerCase();
+        if (text.includes("gps")) return false;
+      }
       if (!PNG_TEXT_CHUNKS.has(c.name) && c.name !== PNG_EXIF_CHUNK) return true;
       const text = new TextDecoder().decode(c.data).toLowerCase();
-      return ![...stripFields].some((f) => text.includes(f));
+      const key = text.split("\0")[0]?.toLowerCase() ?? text;
+      if ([...stripFields].some((f) => key.includes(f) || text.includes(f))) return false;
+      return true;
     });
     return new Blob([new Uint8Array(encodeChunks(kept))], { type: "image/png" });
   }
@@ -271,7 +320,7 @@ async function scrubPng(file: File, opts: ScrubOptions): Promise<Blob> {
 function diffStripped(
   before: MetadataReport,
   after: MetadataReport,
-  opts: ScrubOptions
+  opts: ScrubOptions,
 ): ScrubFieldEntry[] {
   const stripped: ScrubFieldEntry[] = [];
   for (const block of before.blocks) {
@@ -315,7 +364,7 @@ function shouldStripField(field: string, opts: ScrubOptions): boolean {
       opts.custom?.some(
         (c) =>
           c.field === field ||
-          (c.namespace === "GPS" && (field.toLowerCase().includes("gps") || GPS_KEYS.has(field)))
+          (c.namespace === "GPS" && (field.toLowerCase().includes("gps") || GPS_KEYS.has(field))),
       ) ?? false
     );
   }

@@ -44,6 +44,8 @@ MAX_FILE_BYTES = int(os.environ.get("MAX_FILE_BYTES", str(100 * 1024 * 1024)))
 SKIP_METADATA_NAMESPACES = frozenset({"System", "ExifTool", "File"})
 SKIP_METADATA_FIELDS = frozenset({"SourceFile", "ExifToolVersion"})
 VALID_SCRUB_PRESETS = frozenset({"all", "gps_author", "orientation_only", "custom"})
+ORIENTATION_NOOP_SUFFIXES = frozenset({".pdf", ".mp3", ".mp4", ".mov", ".wav", ".flac"})
+AUTHOR_LIKE_FIELDS = frozenset({"artist", "author", "creator", "ownername", "copyright", "owner"})
 
 
 def safe_upload_name(name: str | None) -> str:
@@ -74,7 +76,69 @@ def run_exiftool(args: list[str], timeout: int = 120) -> None:
         timeout=timeout,
     )
     if result.returncode != 0:
-        raise HTTPException(500, "ExifTool processing failed")
+        detail = (result.stderr or result.stdout or "ExifTool processing failed").strip()
+        raise HTTPException(500, detail[:500])
+
+
+def run_ffmpeg(args: list[str], timeout: int = 120) -> None:
+    result = subprocess.run(
+        ["ffmpeg", *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "FFmpeg processing failed").strip()
+        raise HTTPException(500, detail[:500])
+
+
+def is_mp3(path: Path) -> bool:
+    return path.suffix.lower() == ".mp3"
+
+
+def parse_custom_fields(preset: str, custom: str | None) -> list[dict] | None:
+    if preset != "custom":
+        return None
+    if not custom:
+        raise HTTPException(400, "custom preset requires JSON field list in 'custom' form field")
+    try:
+        fields = json.loads(custom)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(400, f"invalid custom JSON: {exc}") from exc
+    if not isinstance(fields, list) or not fields:
+        raise HTTPException(400, "custom preset requires a non-empty JSON array")
+    return fields
+
+
+def scrub_mp3(path: Path, out_path: Path, preset: str, custom_fields: list[dict] | None) -> None:
+    tmp = out_path.with_name(f"{out_path.stem}_ffmpeg{out_path.suffix}")
+    try:
+        if preset == "all" or preset == "gps_author":
+            run_ffmpeg(
+                ["-y", "-i", str(path), "-map_metadata", "-1", "-codec", "copy", str(tmp)],
+            )
+        elif preset == "orientation_only":
+            shutil.copy2(path, tmp)
+        elif preset == "custom" and custom_fields:
+            args = ["-y", "-i", str(path), "-codec", "copy"]
+            for item in custom_fields:
+                field = item.get("field", "").lower()
+                if "artist" in field or "author" in field:
+                    args.extend(["-metadata", "artist="])
+                if "title" in field:
+                    args.extend(["-metadata", "title="])
+                if "album" in field:
+                    args.extend(["-metadata", "album="])
+            if len(args) == 5:
+                run_ffmpeg(["-y", "-i", str(path), "-map_metadata", "-1", "-codec", "copy", str(tmp)])
+            else:
+                args.append(str(tmp))
+                run_ffmpeg(args)
+        else:
+            shutil.copy2(path, tmp)
+        tmp.replace(out_path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def read_metadata(path: Path, name: str, mime: str) -> dict[str, Any]:
@@ -122,7 +186,9 @@ def scrub_file(path: Path, preset: str, custom_fields: list[dict] | None = None)
     out_path = path.with_name(f"{path.stem}_clean{path.suffix}")
     shutil.copy2(path, out_path)
 
-    if preset == "all":
+    if is_mp3(path):
+        scrub_mp3(path, out_path, preset, custom_fields)
+    elif preset == "all":
         run_exiftool(["-all=", "-overwrite_original", str(out_path)])
     elif preset == "gps_author":
         run_exiftool(
@@ -141,17 +207,37 @@ def scrub_file(path: Path, preset: str, custom_fields: list[dict] | None = None)
             ]
         )
     elif preset == "orientation_only":
-        run_exiftool(["-all=", "-tagsfromfile", "@", "-orientation", "-overwrite_original", str(out_path)])
+        if path.suffix.lower() not in ORIENTATION_NOOP_SUFFIXES:
+            run_exiftool(["-all=", "-tagsfromfile", "@", "-orientation", "-overwrite_original", str(out_path)])
     elif preset == "custom" and custom_fields:
         args = ["-overwrite_original"]
+        extra_tags: list[str] = []
         for item in custom_fields:
             field = item.get("field", "")
             if field:
                 args.append(f"-{field}=")
+                bare = field.split(":")[-1].lower()
+                if bare in AUTHOR_LIKE_FIELDS:
+                    extra_tags.extend(
+                        [
+                            "-Artist=",
+                            "-Author=",
+                            "-Creator=",
+                            "-XMP:Artist=",
+                            "-XMP:Creator=",
+                            "-XMP:Author=",
+                            "-ItemList:Artist=",
+                            "-PDF:Author=",
+                            "-PDF:Creator=",
+                        ]
+                    )
+        for tag in extra_tags:
+            if tag not in args:
+                args.append(tag)
         args.append(str(out_path))
         run_exiftool(args)
     elif preset == "custom":
-        run_exiftool(["-overwrite_original", str(out_path)])
+        raise HTTPException(400, "custom preset requires JSON field list in 'custom' form field")
     else:
         raise HTTPException(400, f"Unknown preset: {preset}")
 
@@ -169,13 +255,10 @@ def scrub_file(path: Path, preset: str, custom_fields: list[dict] | None = None)
         if (entry["namespace"], entry["field"]) in before_keys - after_keys
     ]
 
-    if preset == "all":
-        retained = []
-    else:
-        retained = [
-            entry for entry in retained_list
-            if (entry["namespace"], entry["field"]) in after_keys
-        ]
+    retained = [
+        entry for entry in retained_list
+        if (entry["namespace"], entry["field"]) in after_keys
+    ]
 
     return out_path, stripped, retained
 
@@ -221,7 +304,7 @@ async def v1_scrub(
     if preset not in VALID_SCRUB_PRESETS:
         raise HTTPException(400, f"Invalid preset: {preset}")
 
-    custom_fields = json.loads(custom) if custom else None
+    custom_fields = parse_custom_fields(preset, custom)
 
     job_dir = tempfile.mkdtemp(prefix="exifscrub-")
     try:
@@ -271,12 +354,15 @@ async def v1_scrub(
 async def v1_batch(
     file: UploadFile = File(...),
     preset: str = Form("all"),
+    custom: str = Form(None),
 ) -> JSONResponse:
     import io
     import zipfile
 
     if preset not in VALID_SCRUB_PRESETS:
         raise HTTPException(400, f"Invalid preset: {preset}")
+
+    custom_fields = parse_custom_fields(preset, custom)
 
     content = await file.read()
     if len(content) > MAX_FILE_BYTES:
@@ -306,7 +392,7 @@ async def v1_batch(
             for fpath in sorted(extract_dir.rglob("*")):
                 if not fpath.is_file():
                     continue
-                cleaned_path, stripped, retained = scrub_file(fpath, preset)
+                cleaned_path, stripped, retained = scrub_file(fpath, preset, custom_fields)
                 cleaned_bytes = cleaned_path.read_bytes()
                 cleaned_sha = hashlib.sha256(cleaned_bytes).hexdigest()
                 rel = fpath.relative_to(extract_dir)

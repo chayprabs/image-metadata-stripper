@@ -12,7 +12,7 @@ test("scrubs geotagged jpeg and writes prove-clean outputs", () => {
   if (!existsSync(sample)) throw new Error("sample missing");
   execFileSync("node", [cli, "--preset=all", sample], { stdio: "pipe" });
 
-  const out = join(process.cwd(), "clean-geotagged.jpg");
+  const out = join(dirname(sample), "clean-geotagged.jpg");
   const proveJson = `${out}.prove-clean.json`;
   const provePdf = `${out}.prove-clean.pdf`;
 
