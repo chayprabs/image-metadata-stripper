@@ -31,7 +31,7 @@
     "png-chunks-extract": "^1.0.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
+    "@types/node": "^25.9.3",
     "tsup": "^8.3.5",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
